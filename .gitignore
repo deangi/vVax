@@ -1,0 +1,22 @@
+# Build / flash / secrets
+.arduino/
+build/
+*.bin
+*.elf
+*.map
+
+# Local WiFi secrets / large media (never commit)
+secrets.h.local
+vVaxSdCard/wificonfig-*.ini
+!vVaxSdCard/wificonfig.ini
+vVaxSdCard/disks/*.dsk
+vVaxSdCard/disks/*.img
+vVaxSdCard/disks/*.iso
+vVaxSdCard/firmware/*
+!vVaxSdCard/firmware/README.md
+!vVaxSdCard/disks/README.md
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini

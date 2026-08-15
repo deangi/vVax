@@ -1,0 +1,4 @@
+# Arduino CLI sketch project file.
+# Board: Freenove ESP32-S3 2.8" display (same FQBN family as v8088 / vpdp1170).
+#   USB CDC on boot, 16 MB flash, Huge App partition, OPI PSRAM
+default_fqbn: esp32:esp32:esp32s3:CDCOnBoot=cdc,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi
