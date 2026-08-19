@@ -6,37 +6,39 @@
 
 | Feature | Target |
 |---------|--------|
-| Guest RAM | **`ram_mb` = 2, 4, or 6** in `/vaxconfig.ini` (default 6; auto step-down on OOM) |
+| Guest RAM | **`ram_mb` = 2, 4, 6, or 8** in `/vaxconfig.ini` (default 8; auto step-down on OOM) |
 | Console | **VT100** TFT + Telnet + USB (host_lib from vpdp/v8088) |
+| Host UX | Status line, touch settings, rich Telnet shell — **Phase 7**, mirror vpdp1170 |
 | Storage | **≥2 MSCP drives** (`[disks] a=` / `b=`) |
 | Clock | Interval timer + TOY (`vax_clock`) |
 | Network | Secondary DELQA-class + **NAT** (`eth_nat`, vpdp1170 keys) |
 
 ## PSRAM risk
 
-Typical Freenove board has ~8 MB PSRAM. A 6 MB guest arena leaves little for:
+Typical Freenove board has ~8 MB PSRAM. Allocate the guest arena **before**
+WiFi/lwIP. With `ram_mb=8`, try full 8 MiB then back off **64 KiB at a time**
+until alloc succeeds (floor 6 MiB), then 6/4/2. Stock `/boot` @ `0x7D0000`
+needs roughly ≥ `0x7E5000` guest RAM.
 
-- Telnet / console FIFOs (prefer `EXT_RAM_BSS_ATTR` but still competes)
-- WiFi / lwIP / FTP
-- TFT frame scratch
-
-If boot logs show RAM alloc failure, set `ram_mb = 4` or `2` in `/vaxconfig.ini`.
-Allowed values are only **2, 4, and 6**.
+Allowed values: **2, 4, 6, 8**.
 
 ## Config files (SD root)
 
 | File | Role |
 |------|------|
 | `/wificonfig.ini` | WiFi, NTP, Telnet, FTP |
-| `/vaxconfig.ini` | title, ram_mb, console boot_text, disks a/b, clock, ethernet |
+| `/vaxconfig.ini` | title, ram_mb, console boot_text, disks a/b, clock, ethernet, diag MSCP dump |
 
 Template tree: [`vVaxSdCard/`](../vVaxSdCard/).
 
 ## Success for this scaffold
 
 - Sketch builds and shows VT100 console path.
-- `ram_mb` selects 2 / 4 / 6 MB with OOM step-down.
+- `ram_mb` selects 2 / 4 / 6 / 8 MB with OOM step-down.
 - Two MSCP mount slots.
 - Clock stub present.
 - Phase 2 CPU self-test prints `vVax OK` and sets R0=`OK`.
+- Phase 3 MMU PTE walk self-test.
+- Phase 4 console/clock IPR self-tests (`console OK`, `clock selftest: PASS`).
 - Ethernet NAT module present; device CSR wired in a later phase.
+- Phase 7: status bar, touch GUI, full Telnet management shell (vpdp1170 parity).

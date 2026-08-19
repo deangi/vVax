@@ -4,7 +4,7 @@
 struct AppConfig {
   // [system] in /vaxconfig.ini
   String title;
-  int    ram_mb = 6;   // [system] ram_mb= 2, 4, or 6
+  int    ram_mb = 8;   // [system] ram_mb= 2, 4, 6, or 8
 
   // [wifi] in /wificonfig.ini
   String wifi_ssid;
@@ -44,6 +44,10 @@ struct AppConfig {
 
   // [clock]
   bool clock_enabled = true;
+
+  // [diag] — MSCP serial dump (flags: csr,init,ring,cmd,xfer,irq,all | 0xNN)
+  String   mscp_dump_flags;     // raw token list / hex from INI
+  uint32_t mscp_dump_count = 0; // max log lines; 0 = off
 };
 
 extern AppConfig cfg;

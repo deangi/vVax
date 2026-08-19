@@ -3,7 +3,10 @@
 // Requires TFT_eSPI with FNK0104B selected in User_Setup_Select.h.
 // Board: ESP32S3 Dev Module, USB CDC on boot enabled, OPI PSRAM, 16 MB flash,
 // Huge App partition (3 MB APP).
-// V0.1 scaffold — Dean Gienger
+// V0.1 scaffold — Dean Gienger, Cursor
+// First test - boot NetBSD 10.1 - from image that boots on open simh
+// Second test - boot VAX/VMS
+//
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -27,6 +30,7 @@
 #include "vax_console.h"
 #include "vax_clock.h"
 #include "vax_mscp.h"
+#include "vax_boot.h"
 #include "eth_nat.h"
 #include "host_lib/console/term_personality.h"
 #include "host_lib/net/net_task.h"
@@ -145,6 +149,8 @@ static void sd_and_config_init() {
 
 static void mount_mscp_drives() {
   vax_mscp::begin();
+  vax_mscp::set_dump(vax_mscp::parse_dump_flags(cfg.mscp_dump_flags.c_str()),
+                     cfg.mscp_dump_count);
   char line[48];
   int mounted = 0;
   if (cfg.disk_a.length()) {
@@ -158,23 +164,63 @@ static void mount_mscp_drives() {
 }
 
 static bool alloc_guest_ram() {
-  static const int kFallback[] = { 6, 4, 2 };
+  // Call this *before* WiFi/lwIP — they consume enough PSRAM that a late
+  // 8 MiB alloc always fails and we fall back to 6 MiB (which cannot hold
+  // stock /boot @ 0x7D0000).
+  const size_t free0 = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+  LOG("PSRAM free before guest alloc: %u KB (largest block %u KB)",
+      (unsigned)(free0 / 1024u), (unsigned)(largest / 1024u));
+
   int want = cfg.ram_mb;
   if (!vax_ram_mb_ok(want)) want = VAX_RAM_MB_DEFAULT;
 
-  // Try requested size, then smaller legal sizes.
-  for (int pass = 0; pass < 3; pass++) {
-    int mb = (pass == 0) ? want : kFallback[pass];
-    if (pass > 0 && mb >= want) continue;  // only step down
-    if (!vax_ram_mb_ok(mb)) continue;
-    size_t bytes = (size_t)mb * 1024UL * 1024UL;
-    if (vax_cpu::init(bytes)) {
-      cfg.ram_mb = mb;
-      if (mb != want)
-        LOGE("Guest RAM fell back from %d MB to %d MB", want, mb);
+  const size_t step = 64UL * 1024UL;
+  const size_t size8 = 8UL * 1024UL * 1024UL;
+  const size_t floor6 = 6UL * 1024UL * 1024UL;
+
+  // For 8 MB: start at min(8 MiB, largest free block), aligned down to 64 KiB,
+  // then back off 64 KiB at a time until alloc succeeds (or we hit 6 MiB).
+  if (want >= 8) {
+    size_t start = size8;
+    if (largest < start) start = largest & ~(step - 1u);
+    if (start > size8) start = size8;
+    for (size_t bytes = start; bytes >= floor6; bytes -= step) {
+      if (!vax_cpu::init(bytes)) {
+        if (bytes == floor6) break;
+        continue;
+      }
+      cfg.ram_mb = 8;
+      if (bytes < size8) {
+        LOG("Guest RAM: %u bytes (8 MB − %u KB)",
+            (unsigned)bytes,
+            (unsigned)((size8 - bytes) / 1024UL));
+      }
+      // /boot @ 0x7A0000 needs RAM through ~0x7B5000; stock @ 0x7D0000 needs ~0x7E5000.
+      if (bytes < 0x7B5000u) {
+        LOGE("Guest RAM < 0x7B5000 — /boot @ 0x7A0000 will not fit; "
+             "use --new-base 0x5D0000 or free PSRAM");
+      }
       return true;
     }
   }
+
+  static const int kFall[] = { 6, 4, 2 };
+  for (int i = 0; i < 3; i++) {
+    int mb = kFall[i];
+    if (mb > want) continue;
+    size_t bytes = (size_t)mb * 1024UL * 1024UL;
+    if (!vax_cpu::init(bytes)) continue;
+    cfg.ram_mb = mb;
+    if (mb != want)
+      LOGE("Guest RAM fell back from %d MB to %d MB (PSRAM pressure)", want, mb);
+    if (bytes < 0x7B5000u) {
+      LOGE("Guest RAM < 0x7B5000 — need /boot @ 0x5D0000 (6 MB) or 0x7A0000 (≈8 MB−192 KB)");
+    }
+    return true;
+  }
+  LOGE("Guest RAM alloc failed (want %d MB, largest PSRAM block %u KB)",
+       want, (unsigned)(largest / 1024u));
   return false;
 }
 
@@ -195,10 +241,20 @@ static void guest_cold_start() {
   vax_mmu::reset();
   vax_console::reset();
   if (cfg.clock_enabled) vax_clock::reset();
+  vax_mscp::reset();
   telnet_reset_guest_io();
   for (size_t i = 0; i < cfg.boot_input_len; i++)
     vax_console::inject(cfg.boot_input[i]);
   vax_cpu::cold_boot();
+
+  // Phase 6: NetBSD xxboot FROM750 handoff from configured boot unit.
+  uint8_t unit = (cfg.boot_unit == 'b' || cfg.boot_unit == 'B') ? 1 : 0;
+  if (vax_boot::start_mscp(unit)) {
+    vax_cpu::run();
+    LOG("guest running (NetBSD xxboot)");
+  } else {
+    LOG("guest halted (no MSCP boot)");
+  }
 }
 
 static void render_task(void*) {
@@ -235,6 +291,23 @@ void setup() {
 
   g_ui_mutex = xSemaphoreCreateMutex();
   sd_and_config_init();
+
+  // Guest arena before WiFi/lwIP so 8 MB-class alloc can succeed.
+  tft_status(ROW_CPU, "CPU:   ", "alloc RAM...", TFT_YELLOW);
+  if (alloc_guest_ram()) {
+    char msg[40];
+    size_t rb = vax_cpu::ram_bytes();
+    if (cfg.ram_mb == 8 && rb < 8UL * 1024UL * 1024UL)
+      snprintf(msg, sizeof(msg), "OK %uK", (unsigned)(rb / 1024u));
+    else
+      snprintf(msg, sizeof(msg), "OK %d MB", cfg.ram_mb);
+    tft_status(ROW_CPU, "CPU:   ", msg, TFT_GREEN);
+    guest_ready = true;
+  } else {
+    tft_status(ROW_CPU, "CPU:   ", "RAM FAIL", TFT_RED);
+    guest_ready = false;
+  }
+
   mount_mscp_drives();
 
   console_init();
@@ -258,19 +331,13 @@ void setup() {
 
   apply_ethernet_nat();
 
-  tft_status(ROW_CPU, "CPU:   ", "alloc RAM...", TFT_YELLOW);
-  if (alloc_guest_ram()) {
-    char msg[40];
-    snprintf(msg, sizeof(msg), "OK %d MB", cfg.ram_mb);
-    tft_status(ROW_CPU, "CPU:   ", msg, TFT_GREEN);
-    guest_ready = true;
+  if (guest_ready) {
     guest_cold_start();
     tft_status(ROW_CPU, "CPU:   ",
-               (vax_cpu::state().r[0] == 0x4F4B0000u) ? "selftest PASS" : "selftest FAIL",
-               (vax_cpu::state().r[0] == 0x4F4B0000u) ? TFT_GREEN : TFT_RED);
-  } else {
-    tft_status(ROW_CPU, "CPU:   ", "RAM FAIL", TFT_RED);
-    guest_ready = false;
+               vax_cpu::running() ? "booting MSCP" :
+               (vax_cpu::state().r[0] == 0x4F4B0000u) ? "selftest PASS" : "halted",
+               vax_cpu::running() ? TFT_GREEN :
+               (vax_cpu::state().r[0] == 0x4F4B0000u) ? TFT_GREEN : TFT_YELLOW);
   }
 
   ui_begin(&tft, g_ui_mutex);
@@ -291,10 +358,21 @@ void loop() {
   }
 
   if (guest_ready) {
+    static uint32_t live_ms = 0;
+    uint32_t now = millis();
+    if (now - live_ms >= 10000u) {
+      live_ms = now;
+      vax_cpu::State& st = vax_cpu::state();
+      LOG("live: PC=%08X SP=%08X run=%u halt=%u MAPEN=%u",
+          (unsigned)st.r[vax_cpu::R_PC], (unsigned)st.r[vax_cpu::R_SP],
+          vax_cpu::running() ? 1u : 0u, st.halt ? 1u : 0u,
+          vax_mmu::mapen() ? 1u : 0u);
+    }
     vax_console::poll();
     if (cfg.clock_enabled) vax_clock::poll();
+    vax_mscp::poll();
     if (vax_cpu::running())
-      vax_cpu::step(1000);
+      vax_cpu::step(5000);
   }
 
   delay(1);

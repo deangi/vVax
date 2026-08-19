@@ -2,8 +2,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// MicroVAX II–class integer subset interpreter (Phase 2).
-// Study reference: Open SIMH VAX/ (MIT). Not a full ISA yet.
+// MicroVAX II–class integer subset interpreter (Phase 2+).
+// Study reference: Open SIMH VAX/ (MIT) — local path in docs/research/isa.md.
+// Not a full ISA yet.
 namespace vax_cpu {
 
 enum {
@@ -27,13 +28,17 @@ static constexpr uint32_t CONSOLE_TX_PA = 0x20000000u;
 struct State {
   uint32_t r[16];   // R0–R11, AP, FP, SP, PC
   uint32_t psl;
+  uint32_t scbb;    // System Control Block base (IPR 17)
+  uint32_t pcbb;
   bool     halt;
   uint32_t fault;   // sticky: 1=bad opcode, 2=bad addr, 3=bad specifier
+  uint32_t irq_count;  // delivered hardware interrupts (diag)
 };
 
 bool     init(size_t ram_bytes);
 void     reset();
 void     cold_boot();
+void     run();              // clear halt and execute from current PC
 void     step(unsigned n);
 bool     running();
 void     request_halt();

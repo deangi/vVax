@@ -1,21 +1,36 @@
-# MSCP / install media (user-supplied)
+# Disk images (MSCP units)
 
-| Host path | Unit | Notes |
-|-----------|------|--------|
-| `/disks/dua0.dsk` | MSCP A | Installed NetBSD system (create with Open SIMH) |
-| `/disks/NetBSD-10.1-vax.iso` | MSCP B | Official NetBSD 10.1/vax install ISO (~427 MB) |
-| `/disks/dub0.dsk` | optional | Second data pack |
+Place large images here; they are **gitignored**. Example layout:
 
-## Current template (`vaxconfig.ini`)
+| File | Role |
+|------|------|
+| `netbsd101-boot.dsk` | Installed NetBSD/vax system (MSCP A) |
+| `CD-NetBSD-10.1-vax.iso` | Official install CD (MSCP B) |
+| `boot-pristine.elf` | Stock `/boot` extracted from the ISO (`BOOT.;1`) |
 
-- `a=` empty until you have an installed `dua0.dsk`
-- `b=/disks/NetBSD-10.1-vax.iso` — already copied into this folder from Downloads
+ISO and `.dsk`/`.img` files are gitignored (large). Block size: **512 bytes**.
 
-## Build `dua0.dsk` on a PC
+## NetBSD `/boot` ELF note (FROM750 / xxboot)
 
-1. Open SIMH / `simh-vax` (or microvax2): blank `ra92` on `rq0`, ISO on `rq1` as `cdrom`
-2. Follow https://www.netbsd.org/ports/vax/emulator-howto.html
-3. Copy the installed HDD image here as `dua0.dsk`
-4. Switch to `vaxconfig-netbsd.ini` (or set `a=/disks/dua0.dsk`)
+Stock NetBSD 10.1/vax `/boot` is ELF with `e_entry=0` and `p_vaddr=0x7d0000`
+(8 MB − 192 KB). xxboot loads at `e_entry` and `hoppabort` REIs to `entry+2`,
+which becomes **PC=2 → HALT** unless `e_entry` is fixed.
 
-ISO and `.dsk` files are gitignored (large). Block size: **512 bytes**.
+On Freenove, guest RAM often lands at **8192000 bytes (`0x7D0000`)** after the
+64 KiB backoff — exactly the stock link address, so `/boot` has **no room**.
+Default relocate base is therefore **`0x7A0000`** (192 KB below that end):
+
+```text
+python tools/opcodes/relocate_boot_elf.py --elf vVaxSdCard/disks/boot-pristine.elf ^
+  vVaxSdCard/disks/netbsd101-boot.dsk
+```
+
+| Guest RAM | `--new-base` |
+|-----------|----------------|
+| ≈8 MiB−192 KB (`0x7D0000` bytes) | **`0x7A0000`** (default) |
+| Full 8 MiB | `0x7D0000` |
+| 6 MiB | `0x5D0000` |
+
+Do **not** use `0x200000`: a ~3.5 MB kernel at phys 0 overwrites `/boot` mid-load.
+
+Always start from a **pristine** ELF. Do not re-patch an already relocated image.

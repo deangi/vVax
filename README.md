@@ -3,8 +3,9 @@
 MicroVAX II–class emulator sketch for the **Freenove ESP32-S3 2.8" Display**
 board (same family as vpdp1170 / v8088 / vZ80).
 
-**Status:** V0.3 — Phase 2 CPU self-test + Phase 3 MMU PTE walk. NetBSD install
-ISO can live on MSCP B; installed `dua0.dsk` still built on desktop Open SIMH.
+**Status:** V0.6.1 — Phase 6 NetBSD xxboot/`/boot` (FROM750, no proprietary ROM).
+Next: finish kernel handoff; **Phase 7** host UX parity with vpdp1170
+(status line, touch GUI, Telnet shell). See [`docs/PHASES.md`](docs/PHASES.md).
 
 ## Board / build
 
@@ -22,7 +23,7 @@ ISO can live on MSCP B; installed `dua0.dsk` still built on desktop Open SIMH.
 | Item | Choice |
 |------|--------|
 | Emulated system | MicroVAX II–class (KA630-ish, Q22 story) |
-| Guest RAM | **`ram_mb`** = 2, 4, or 6 (default 6; host steps down on OOM) |
+| Guest RAM | **`ram_mb`** = 2, 4, 6, or 8 (default 8; host steps down on OOM) |
 | Console | **VT100** on TFT + Telnet + USB |
 | Disks | **Two MSCP** units (`a` / `b` → dua / dub) |
 | Clock | Interval timer + TOY |
@@ -35,7 +36,7 @@ See [`docs/TARGET.md`](docs/TARGET.md) and [`docs/PHASES.md`](docs/PHASES.md).
 Copy [`vVaxSdCard/`](vVaxSdCard/) to a FAT32 card:
 
 - `/wificonfig.ini` — WiFi, NTP, Telnet, FTP
-- `/vaxconfig.ini` — RAM, console `boot_text`, disks, clock, ethernet
+- `/vaxconfig.ini` — RAM, console `boot_text`, disks, clock, ethernet, `[diag]`
 - `/disks/*.dsk` — user-supplied MSCP images
 - `/firmware/` — user-supplied ROM blobs (not redistributed here)
 
@@ -43,7 +44,7 @@ Copy [`vVaxSdCard/`](vVaxSdCard/) to a FAT32 card:
 
 ```text
 TFT / Telnet / USB ──► vax_console ──► (future DZ CSR) ──► CPU
-PSRAM 6 MB           ◄── vax_cpu / vax_mmu (stubs)
+PSRAM 8 MB try        ◄── vax_cpu / vax_mmu (step-down 6/4/2 on OOM)
 SD MSCP a,b          ◄── vax_mscp
 host millis / NTP    ──► vax_clock
 WiFi STA             ◄── eth_nat (secondary DELQA hook)

@@ -20,3 +20,8 @@ vVaxSdCard/firmware/*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Python tooling
+__pycache__/
+*.pyc
+tools/opcodes/out/

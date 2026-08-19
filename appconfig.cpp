@@ -224,6 +224,8 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
 
   config_apply_ethernet_defaults(cfg);
   cfg.clock_enabled = true;
+  cfg.mscp_dump_flags = "";
+  cfg.mscp_dump_count = 0;
 }
 
 enum ConfigDomain : uint8_t { CONFIG_NETWORK, CONFIG_EMULATOR };
@@ -292,6 +294,14 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
     }
   } else if (section == "clock") {
     if (key == "enabled") cfg.clock_enabled = truthy(val);
+  } else if (section == "diag") {
+    if (key == "mscp_dump_flags" || key == "mscp_dump")
+      cfg.mscp_dump_flags = val;
+    else if (key == "mscp_dump_count") {
+      long n = val.toInt();
+      if (n < 0) cfg.mscp_dump_count = 0xFFFFFFFFu;  // unlimited
+      else cfg.mscp_dump_count = (uint32_t)n;
+    }
   }
 }
 
@@ -365,7 +375,7 @@ bool config_load_vax(AppConfig& cfg) {
   }
   if (cfg.title.length() == 0) cfg.title = APP_TITLE;
   if (!vax_ram_mb_ok(cfg.ram_mb)) {
-    LOGE("[system] ram_mb=%d invalid (use 2, 4, or 6); defaulting to %d",
+    LOGE("[system] ram_mb=%d invalid (use 2, 4, 6, or 8); defaulting to %d",
          cfg.ram_mb, VAX_RAM_MB_DEFAULT);
     cfg.ram_mb = VAX_RAM_MB_DEFAULT;
   }
@@ -417,7 +427,7 @@ bool config_write_default_vax(const AppConfig& cfg) {
   f.println();
   f.println("[system]");
   f.printf ("title  = %s\r\n", cfg.title.c_str());
-  f.println("; Guest RAM in MB. Allowed: 2, 4, or 6.");
+  f.println("; Guest RAM in MB. Allowed: 2, 4, 6, or 8.");
   f.printf ("ram_mb = %d\r\n", cfg.ram_mb);
   f.println();
   f.println("[console]");
@@ -441,6 +451,14 @@ bool config_write_default_vax(const AppConfig& cfg) {
   f.printf ("guest_ip   = %s\r\n", ip);
   f.printf ("guest_mask = %s\r\n", mask);
   f.printf ("gateway_ip = %s\r\n", gw);
+  f.println();
+  f.println("[diag]");
+  f.println("; MSCP dump: flags=csr,init,ring,cmd,xfer,irq,all (or 0x3F); count=max lines (0=off, -1=unlimited).");
+  f.printf ("mscp_dump_flags = %s\r\n", cfg.mscp_dump_flags.c_str());
+  if (cfg.mscp_dump_count == 0xFFFFFFFFu)
+    f.println("mscp_dump_count = -1");
+  else
+    f.printf ("mscp_dump_count = %lu\r\n", (unsigned long)cfg.mscp_dump_count);
   f.close();
   return true;
 }
@@ -483,4 +501,6 @@ void config_print(const AppConfig& cfg) {
       cfg.disk_a.c_str(), cfg.disk_b.c_str(), cfg.boot_unit);
   LOG("[ethernet] enabled=%s  mac=%s  guest=%s/%s  gateway=%s",
       cfg.eth_enabled ? "true" : "false", mac, ip, mask, gw);
+  LOG("[diag]    mscp_dump_flags=\"%s\"  mscp_dump_count=%lu",
+      cfg.mscp_dump_flags.c_str(), (unsigned long)cfg.mscp_dump_count);
 }

@@ -4,8 +4,9 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.3"
-#define APP_BUILD_DATE  "2026-08-14"
+#define APP_VERSION     "V0.6.37"
+// Unique every compile so Arduino "already in flash" skips are obvious.
+#define APP_BUILD_DATE  (__DATE__ " " __TIME__)
 
 // Freenove 2.8" only. LovyanGFX / CrowPanel is not built in this tree.
 #define VPDP_DISPLAY_TFT_ESPI    1
@@ -49,11 +50,13 @@
 #define DEFAULT_DUA0    "/disks/dua0.dsk"
 #define DEFAULT_DUB0    "/disks/NetBSD-10.1-vax.iso"
 
-// ---- Guest RAM: /vaxconfig.ini [system] ram_mb=  must be 2, 4, or 6 ----
+// ---- Guest RAM: /vaxconfig.ini [system] ram_mb=  must be 2, 4, 6, or 8 ----
+// 8 MB is enough for stock NetBSD /boot @ 0x7d0000. alloc_guest_ram() tries
+// full 8 MiB then backs off 64 KiB at a time (before WiFi) down to 6 MiB.
 #define VAX_RAM_MB_MIN      2
-#define VAX_RAM_MB_DEFAULT  6
-#define VAX_RAM_MB_MAX      6
-#define vax_ram_mb_ok(mb)   ((mb) == 2 || (mb) == 4 || (mb) == 6)
+#define VAX_RAM_MB_DEFAULT  8
+#define VAX_RAM_MB_MAX      8
+#define vax_ram_mb_ok(mb)   ((mb) == 2 || (mb) == 4 || (mb) == 6 || (mb) == 8)
 
 // ---- Network ----
 #define TELNET_PORT     23
