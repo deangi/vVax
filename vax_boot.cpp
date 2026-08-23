@@ -1,4 +1,5 @@
 #include "vax_boot.h"
+#include "config.h"
 #include "vax_cpu.h"
 #include "vax_mscp.h"
 #include "vax_console.h"
@@ -237,6 +238,9 @@ uint8_t boot_unit() { return g_unit; }
 uint32_t ka630_conspage_pa() { return g_conspage_pa; }
 
 void plant_ka630_console() {
+#if VAX_MODEL != VAX_MODEL_KA630
+  return;
+#else
   uint8_t* ram = vax_cpu::ram();
   size_t ram_bytes = vax_cpu::ram_bytes();
   // Last 512-byte VAX page. Kernel loadfile occupies PA 0..~4MB; /boot sits
@@ -274,6 +278,7 @@ void plant_ka630_console() {
 
   LOG("boot: KA630 conspage @0x%08X (last page, NVR→host console stubs)",
       (unsigned)cons);
+#endif
 }
 
 static uint32_t g_niclose_pa = 0;
@@ -307,7 +312,12 @@ bool is_niclose(uint32_t pa) {
 }
 
 bool nvr_hit(uint32_t pa) {
+#if VAX_MODEL != VAX_MODEL_KA630
+  (void)pa;
+  return false;
+#else
   return pa >= KA630_NVR_PA && pa < KA630_NVR_PA + 8u;
+#endif
 }
 
 uint8_t nvr_read8(uint32_t pa) {
@@ -336,6 +346,10 @@ static void jsb_return() {
 }
 
 bool ka630_console_jsb(uint32_t target) {
+#if VAX_MODEL != VAX_MODEL_KA630
+  (void)target;
+  return false;
+#else
   auto& st = vax_cpu::state();
   if (target == KA630_PUTC_POLL_PA) {
     st.r[0] = 1;  // ready
@@ -363,6 +377,7 @@ bool ka630_console_jsb(uint32_t target) {
     return true;
   }
   return false;
+#endif
 }
 
 void rom_disk_read() {
@@ -653,7 +668,9 @@ bool start_mscp(uint8_t unit) {
     return false;
   }
 
+#if VAX_MODEL == VAX_MODEL_KA630
   plant_ka630_console();
+#endif
 
   st.r[0] = BDEV_UDA;
   st.r[1] = 0x20000000u;

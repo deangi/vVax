@@ -1,4 +1,5 @@
 #include "vax_clock.h"
+#include "config.h"
 #include "platform.h"
 
 #include <Arduino.h>
@@ -7,7 +8,9 @@
 namespace vax_clock {
 
 // NetBSD KA630: chip clock at KA630CLK; TODR IPR uses TODRBASE on other models.
+#if VAX_MODEL == VAX_MODEL_KA630
 static constexpr uint32_t KA630_TOY_PA    = 0x200B8000u;
+#endif
 static constexpr uint32_t KA630_TOY_WORDS = 15u;
 static constexpr uint32_t TODRBASE        = 1u << 28;
 
@@ -164,7 +167,12 @@ void get_toy(uint8_t* y, uint8_t* mon, uint8_t* d,
 }
 
 bool toy_hit(uint32_t pa) {
+#if VAX_MODEL != VAX_MODEL_KA630
+  (void)pa;
+  return false;
+#else
   return pa >= KA630_TOY_PA && pa < KA630_TOY_PA + KA630_TOY_WORDS * 2u;
+#endif
 }
 
 uint8_t toy_read8(uint32_t pa) {
@@ -239,10 +247,12 @@ bool selftest() {
     LOGE("clock selftest: TODR base missing (%08X)", (unsigned)todr_rd());
     return false;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   if ((g_toy[13] & 0x80u) == 0) {
     LOGE("clock selftest: TOY VRT clear");
     return false;
   }
+#endif
   uint32_t t0 = todr_rd();
   todr_wr(0x12345678u);
   if (todr_rd() != 0x12345678u) {
@@ -250,7 +260,11 @@ bool selftest() {
     return false;
   }
   todr_wr(t0);
+#if VAX_MODEL == VAX_MODEL_KA630
   LOG("clock selftest: PASS (TOY 1-JAN-2026 TODR=%08X)", (unsigned)t0);
+#else
+  LOG("clock selftest: PASS (TODR=%08X)", (unsigned)t0);
+#endif
   return true;
 }
 

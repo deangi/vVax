@@ -168,6 +168,7 @@ static bool pa_ok(uint32_t pa, size_t n) {
   return g_ram && ((uint64_t)pa + n) <= g_ram_bytes;
 }
 
+#if VAX_MODEL == VAX_MODEL_KA630
 // KA630 local I/O: System Identification Extension (findcpu for UV2).
 // High byte 0x01 → vax_boardtype = 0x08000001 (VAX_BTYP_630).
 static constexpr uint32_t KA630_SIE_PA  = 0x20040004u;
@@ -187,7 +188,6 @@ static constexpr uint32_t Q22_MAP_V      = 0x80000000u;
 static constexpr uint32_t Q22_MAP_PFN    = 0x001FFFFFu;  // NetBSD PG_PFNUM
 
 static uint32_t* g_q22map = nullptr;
-static uint32_t  g_mchk_log_left = 2;
 static bool      g_logged_q22_map = false;
 static bool      g_logged_q22_dma = false;
 
@@ -241,9 +241,13 @@ static bool q22_window_to_host(uint32_t phys, uint32_t* host) {
   *host = ((e & Q22_MAP_PFN) << 9) | (off & 0x1FFu);
   return true;
 }
+#endif  // VAX_MODEL_KA630
 
-// MSCP DMA / rings: follow Q22 maps when valid; else identity (/boot).
+static uint32_t g_mchk_log_left = 2;
+
+// MSCP DMA / rings: follow Q22 maps when valid (KA630); else identity.
 static uint32_t mscp_ba_to_host(uint32_t ba) {
+#if VAX_MODEL == VAX_MODEL_KA630
   if (g_q22map) {
     uint32_t q22 = ba & 0x003FFFFFu;
     uint32_t e = g_q22map[q22 >> 9];
@@ -256,6 +260,7 @@ static uint32_t mscp_ba_to_host(uint32_t ba) {
       return host;
     }
   }
+#endif
   return ba & 0x3FFFFFFFu;
 }
 
@@ -494,11 +499,14 @@ static uint8_t mem_r8(uint32_t pa) {
     raise_mmgt(pa, false);
     return 0;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   phys = q22_normalize(phys);
+#endif
   if (vax_mscp::csr_hit(phys)) {
     uint16_t w = vax_mscp::csr_read(phys & ~1u);
     return (phys & 1) ? (uint8_t)(w >> 8) : (uint8_t)w;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   if (phys >= KA630_SIE_PA && phys < KA630_SIE_PA + 4u) {
     unsigned sh = (unsigned)(phys - KA630_SIE_PA) * 8u;
     return (uint8_t)(KA630_SIE_VAL >> sh);
@@ -516,6 +524,7 @@ static uint8_t mem_r8(uint32_t pa) {
     raise_mchk(phys, false);
     return 0;
   }
+#endif
   if (pa_ok(phys, 1)) {
     uint8_t v = g_ram[phys];
     if ((g_watch_rd_head | g_watch_rd_tok) != 0)
@@ -524,8 +533,10 @@ static uint8_t mem_r8(uint32_t pa) {
       trace_name_read(pa, v);
     return v;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   // Other Q22 / KA630 local I/O: probes must not sticky-fault (SIE, QIPCR, …).
   if (q22_io_space(phys)) return 0;
+#endif
   note_fault(2, "pa-r", pa);
   return 0;
 }
@@ -537,7 +548,9 @@ static uint16_t mem_r16(uint32_t pa) {
     raise_mmgt(pa, false);
     return 0;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   phys = q22_normalize(phys);
+#endif
   if (!(phys & 1) && vax_mscp::csr_hit(phys))
     return vax_mscp::csr_read(phys);
   return (uint16_t)(mem_r8(pa) | ((uint16_t)mem_r8(pa + 1) << 8));
@@ -615,7 +628,9 @@ static void mem_w8(uint32_t pa, uint8_t v) {
     raise_mmgt(pa, true);
     return;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   phys = q22_normalize(phys);
+#endif
   if (phys == CONSOLE_TX_PA) {
     vax_console::txdb_wr(v);
     return;
@@ -626,6 +641,7 @@ static void mem_w8(uint32_t pa, uint8_t v) {
     vax_mscp::csr_write(phys & ~1u, w);
     return;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   if (vax_clock::toy_hit(phys)) {
     vax_clock::toy_write8(phys, v);
     return;
@@ -643,6 +659,7 @@ static void mem_w8(uint32_t pa, uint8_t v) {
     raise_mchk(phys, true);
     return;
   }
+#endif
   if (pa_ok(phys, 1)) {
     g_ram[phys] = v;
     if (g_tok_wr != 0)
@@ -651,8 +668,10 @@ static void mem_w8(uint32_t pa, uint8_t v) {
       trace_arg_wr(pa, v);
     return;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   // Ignore writes into Q22/local I/O we do not model yet (QIPCR, …).
   if (q22_io_space(phys)) return;
+#endif
   note_fault(2, "pa-w", pa);
   static bool logged_pa = false;
   if (!logged_pa) {
@@ -668,7 +687,9 @@ static void mem_w16(uint32_t pa, uint16_t v) {
     raise_mmgt(pa, true);
     return;
   }
+#if VAX_MODEL == VAX_MODEL_KA630
   phys = q22_normalize(phys);
+#endif
   if (!(phys & 1) && vax_mscp::csr_hit(phys)) {
     vax_mscp::csr_write(phys, v);
     return;
@@ -1746,13 +1767,42 @@ static void do_chmx(uint8_t opc, uint32_t arg) {
   g_st.r[R_PC] = newpc & ~3u;  // SCB flag bits 1:0
 }
 
-// ---- IPR / interrupts (KA630-style) ----
+// ---- IPR / interrupts ----
 
 static uint32_t cur_ipl() {
   return (g_st.psl & PSL_IPL_MASK) >> PSL_IPL_SHIFT;
 }
 
+#if VAX_MODEL == VAX_MODEL_KA750
+// Architectural set already implemented (KSP…TODR, RXCS…TXDB, SID, MAPEN/TB)
+// plus KA750-specific stubs. Unknown IPR → reserved-operand (SIMH RSVD_OPND).
+static bool ipr_known_750(uint32_t ipr) {
+  switch (ipr) {
+    case 0: case 1: case 2: case 3: case 4:
+    case 8: case 9: case 10: case 11: case 12: case 13:
+    case 16: case 17: case 18: case 20: case 21:
+    case 23:  // CMIE
+    case 24: case 25: case 26: case 27:
+    case 28: case 29: case 30: case 31:  // CSRS/CSRD/CSTS/CSTD (TU58 stub)
+    case 32: case 33: case 34: case 35:
+    case 36: case 37: case 38: case 39: case 40:  // TBDR/CADR/MCESR/CAER/ACCS
+    case 55:  // IORESET
+    case 56: case 57: case 58:  // MAPEN/TBIA/TBIS
+    case 62:  // SID
+      return true;
+    default:
+      return false;
+  }
+}
+#endif
+
 static uint32_t ipr_read(uint32_t ipr) {
+#if VAX_MODEL == VAX_MODEL_KA750
+  if (!ipr_known_750(ipr)) {
+    raise_exception(SCB_RESOP);
+    return 0;
+  }
+#endif
   switch (ipr) {
     case 0: return psl_is() ? g_stk[0] : g_st.r[R_SP];  // KSP
     case 1: return g_stk[1];
@@ -1766,6 +1816,15 @@ static uint32_t ipr_read(uint32_t ipr) {
     case 17: return g_st.scbb;
     case 18: return cur_ipl();
     case 21: return g_sisr & 0xFFFEu;  // SISR (bit 0 unused)
+#if VAX_MODEL == VAX_MODEL_KA750
+    case 23:  // CMIE
+    case 28: case 29: case 30: case 31:
+    case 36: case 37: case 38: case 39:
+    case 55:  // IORESET
+      return 0;
+    case 40:  // ACCS — no FPA until D-float exists
+      return 0;
+#endif
     case 24: return vax_clock::iccs_rd();
     case 25: return vax_clock::nicr_rd();
     case 26: return vax_clock::icr_rd();
@@ -1774,10 +1833,15 @@ static uint32_t ipr_read(uint32_t ipr) {
     case 33: return vax_console::rxdb_rd();
     case 34: return vax_console::txcs_rd();
     case 35: return 0;  // TXDB read undefined / 0
+#if VAX_MODEL == VAX_MODEL_KA750
+    // SID type 2 = VAX_TYP_750. SIMH VAX750_SID|MICRO|HWREV.
+    case 62: return 0x0200639Cu;
+#else
     // SID high byte = CPU type. MicroVAX II is VAX_TYP_UV2 (8).
     // Was 0x01000001 (type 1 = 11/780) which made /boot take the
     // "fromnet" R0-device path and report "Can't open device type 24".
     case 62: return 0x08000001u;
+#endif
     default: return 0;
   }
 }
@@ -1820,6 +1884,12 @@ static void promote_boot_stack_to_s0() {
 }
 
 static void ipr_write(uint32_t ipr, uint32_t value) {
+#if VAX_MODEL == VAX_MODEL_KA750
+  if (!ipr_known_750(ipr)) {
+    raise_exception(SCB_RESOP);
+    return;
+  }
+#endif
   if (g_boot_elf_active && !g_logged_mapen &&
       (ipr == 4 || ipr == 12 || ipr == 13 || ipr == 56)) {
     g_logged_mapen = (ipr == 56);
@@ -1885,6 +1955,17 @@ static void ipr_write(uint32_t ipr, uint32_t value) {
       }
       vax_console::txdb_wr(value);
       break;
+#if VAX_MODEL == VAX_MODEL_KA750
+    case 23:  // CMIE
+    case 26:  // ICR is read-only
+    case 28: case 29: case 30: case 31:
+    case 33:  // RXDB write ignored
+    case 36: case 37: case 38: case 39:
+    case 40:  // ACCS — mtpr no-op until FPA exists
+    case 55:  // IORESET
+    case 62:  // SID read-only
+      break;
+#endif
     default: break;
   }
 }
@@ -2706,8 +2787,10 @@ static void exec_one() {
         g_st.r[R_PC] = ret;
         return;
       }
+#if VAX_MODEL == VAX_MODEL_KA630
       if (vax_boot::ka630_console_jsb(a.addr))
         return;
+#endif
       // Kernel S0 JSB (cmn_idsptch @ 0x800006A8) is normal. Log only
       // unhandled Q22/ROM targets (smashed conspage was 0x2001xxxx).
       if (g_boot_elf_active && !g_logged_wild_jsb &&
@@ -3772,6 +3855,7 @@ static void exec_one() {
       Opnd d = decode_opnd(ACC_R, 4);  // IPR number
       if (!s.ok || !d.ok) return;
       ipr_write(d.value, s.value);
+      if (g_mmgt_abort) return;
       set_nz_long(s.value);
       g_st.psl &= ~PSL_C;
       return;
@@ -3782,6 +3866,7 @@ static void exec_one() {
       Opnd d = decode_opnd(ACC_W, 4);
       if (!s.ok || !d.ok) return;
       uint32_t v = ipr_read(s.value);
+      if (g_mmgt_abort) return;
       store_opnd(d, v, 4);
       set_nz_long(v);
       g_st.psl &= ~PSL_C;
@@ -5030,6 +5115,12 @@ bool init(size_t ram_bytes) {
   g_ram_bytes = ram_bytes;
   memset(g_ram, 0, g_ram_bytes);
   LOG("VAX RAM: %u bytes @ %p (PSRAM)", (unsigned)g_ram_bytes, (void*)g_ram);
+#if VAX_MODEL == VAX_MODEL_KA750
+  LOG("VAX model: KA750 (experimental 11/750; C0/C1)");
+#else
+  LOG("VAX model: KA630 MicroVAX II");
+#endif
+#if VAX_MODEL == VAX_MODEL_KA630
   if (g_q22map) {
     free(g_q22map);
     g_q22map = nullptr;
@@ -5041,6 +5132,7 @@ bool init(size_t ram_bytes) {
     memset(g_q22map, 0, Q22_MAP_BYTES);
     LOG("Q22 maps: %u entries @ %p (PSRAM)", (unsigned)Q22_MAP_COUNT, (void*)g_q22map);
   }
+#endif
   vax_mmu::set_phys_ops(phys_r32, phys_w32);
   vax_mscp::set_phys_ops(mscp_phys_r8, mscp_phys_w8);
   reset();
@@ -5062,10 +5154,12 @@ void reset() {
       2;
 #endif
   g_mchk_log_left = 2;
+#if VAX_MODEL == VAX_MODEL_KA630
   g_logged_q22_map = false;
   g_logged_q22_dma = false;
   if (g_q22map)
     memset(g_q22map, 0, Q22_MAP_BYTES);
+#endif
   g_st.halt = true;
   g_running = false;
   g_hb_elapsed_ms = 0;
@@ -5210,8 +5304,10 @@ void run() {
       2;
 #endif
   g_mchk_log_left = 2;
+#if VAX_MODEL == VAX_MODEL_KA630
   g_logged_q22_map = false;
   g_logged_q22_dma = false;
+#endif
   g_boot_elf_active = false;
   g_irq_log_left =
 #if VVAX_DIAG_LEVEL >= 2

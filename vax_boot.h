@@ -41,6 +41,7 @@ bool apply_cd_boot_hopp(uint32_t* npc);
 void log_elf_hopp(uint32_t npc);
 
 // Plant conspage + NVR pointer so UV2 /boot uses host console, not missing ROM.
+// No-op when VAX_MODEL is KA750 (C2: console is IPR 32–35 only).
 void plant_ka630_console();
 
 // machdep_start niclose is DEUNA teardown; stub to RET (no DEUNA on vVax).

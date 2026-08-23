@@ -14,7 +14,7 @@ void reset();
 void poll();                 // 100 Hz tick from host millis
 void force_tick();           // one extra 10 ms tick (idle-warp during boot)
 
-// KA630 TOY clock chip @ 0x200B8000 (NetBSD chip_gettime).
+// KA630 TOY clock chip @ 0x200B8000 (NetBSD chip_gettime). No-op on KA750.
 bool     toy_hit(uint32_t pa);
 uint8_t  toy_read8(uint32_t pa);
 void     toy_write8(uint32_t pa, uint8_t v);

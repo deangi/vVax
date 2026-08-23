@@ -72,6 +72,17 @@
 // Guest instructions per loop() when running. Was 1000 + delay(1).
 #define VVAX_STEP_BATCH         10000
 
+// Compile-time guest CPU. One machine per firmware image — not a runtime switch.
+// main / KA630 firmware stays MicroVAX II. This branch builds KA750 (11/750).
+// Experimental: C0/C1 only; not a flashable guest-OS machine yet. Do not bump
+// APP_VERSION until a real 750 drop exists (see docs/VAX11750.md).
+#define VAX_MODEL_KA630  630
+#define VAX_MODEL_KA750  750
+#define VAX_MODEL        VAX_MODEL_KA750
+#if VAX_MODEL != VAX_MODEL_KA630 && VAX_MODEL != VAX_MODEL_KA750
+#error "VAX_MODEL must be VAX_MODEL_KA630 or VAX_MODEL_KA750"
+#endif
+
 // ---- Network ----
 #define TELNET_PORT     23
 #define FTP_PORT        21

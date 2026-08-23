@@ -110,6 +110,12 @@ Do not treat stubs as a runnable VAX ISA yet.
 - V0.6.76: V0.6.75 copied BOOT.;1 from file offset 0, so `0x7A0000` was ELF magic (`7F 45 4C 46`) and hopp `PC=007A0002` executed `4C` (`LF`). Host now parses PT_LOAD `p_offset` / `p_filesz` from the header bounce and places those file bytes at **`0x7A0000`** (LBN 864753 is 9×512 = 4608 into the file), then applies the HDD 0x7D0000→0x7A0000 reloc on the text. dest=0 stays xxboot bounce for ISO dir LBNs. Flash `V0.6.76`; expect `REI -> PC=007A0002`, fingerprint `7E`, `/boot` banner; reserved `0x4C` at `7A0002` is ELF-header-at-load-base and should be gone. Log `p_offset` / `p_filesz` / first 8 bytes at `0x7A0000` (VAX entry mask, not `7F 45 4C 46`). **Results:** ELF hdr `p_offset=84` (not 4608) `p_filesz=75496` `p_vaddr=007D0000` `e_entry=0`; CD `/boot` reloc + ELF load dest=`007A0000`; `@7A0000`=`01 01 D0 8F 00 00 7A 00` (VAX mask + `movl $0x7A0000`, not ELF magic); fingerprint `@7A233D=7E`; `REI PC=007A0002` → NetBSD/vax `/boot` banner; `boot netbsd` (autoboot `netbsd.vax` ENOENT + `nfs_open` + `getdisklabel: no disk label` are expected on ISO) → GENERIC / MicroVAX II / root `ra1a` cd9660 → ld.so/init/sh. Then same Phase 6 failures: `/etc/rc: xot: not found` and `copy: tx` of `/etc/rc: Number out of range: 2` (ash `number()`, not sysinst). CD `xot` means this is not HDD-specific. Relocator done; remaining is UV2 `argstr` vs SIMH KA655.
 - Open SIMH V4 KA655 CVAX (MicroVAX 3800/3900, 65468 KB) ran this same disk to multiuser (`boot netbsd` → FFS → full `/etc/rc`; no `xot`, no "not found", no single-user). The gcc-bytes match is real but cannot be the whole story; remaining gap is vVax KA630 UV2 vs that working SIMH (parser output vs `argstr`, or a CPU difference that makes us take `1C166` for letters when CVAX does not).
 
+## 11/750 conversion (branch `vax-11750`)
+
+Work lives on branch `vax-11750` and is specified by [`VAX11750.md`](VAX11750.md).
+C0/C1 (compile-time `VAX_MODEL`, SID/IPR stubs, no Q22 decode on 750) in progress.
+Product target in [`TARGET.md`](TARGET.md) remains MicroVAX II until a 750 drop is the product.
+
 ## Phase 7 — Host UX parity (vpdp1170)
 
 Mirror the common Freenove emulator host stack from **vpdp1170** (same `host_lib` family). Guest console Telnet/FTP/WiFi/INI already work; this phase fills the operator UX gaps.

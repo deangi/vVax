@@ -1,4 +1,5 @@
 #include "vax_mscp.h"
+#include "config.h"
 #include "vax_cpu.h"
 #include "vax_clock.h"
 #include "platform.h"
@@ -100,7 +101,9 @@ static uint32_t g_comm = 0;
 // Q22 is 22-bit. NetBSD raopen STEP3 only writes 6 high bits
 // (((phys)>>16)&077), so /boot above 4 MiB becomes comm=0x003Bxxxx while
 // rings live at 0x007Bxxxx. g_q22_high is the 4 MiB alias that restores phys.
+#if VAX_MODEL == VAX_MODEL_KA630
 static uint32_t g_q22_high = 0;
+#endif
 static bool     g_logged_s0_dma = false;
 static uint8_t  g_dma_log_left = 40;
 static uint32_t g_load_sectors = 0;
@@ -325,7 +328,9 @@ static void hard_init_controller() {
   g_vec = 0154;
   g_cmd_ring_len = g_rsp_ring_len = 0;
   g_comm = 0;
+#if VAX_MODEL == VAX_MODEL_KA630
   g_q22_high = 0;
+#endif
   g_logged_s0_dma = false;
   g_dma_log_left =
 #if VVAX_DIAG_LEVEL >= 2
@@ -404,7 +409,11 @@ static void ring_soft_flag(const Ring& ring) {
 }
 
 static uint32_t q22_expand(uint32_t ba) {
+#if VAX_MODEL == VAX_MODEL_KA630
   return (ba & 0x003fffffu) | g_q22_high;
+#else
+  return ba & 0x3FFFFFFFu;
+#endif
 }
 
 // Ring descriptors are 22-bit Q22. MSCP seq_buffer is a 32-bit host address:
@@ -424,6 +433,7 @@ static void apply_comm_phys(uint32_t comm) {
   g_cmd_ring.base = comm + g_rsp_ring.byte_len;
 }
 
+#if VAX_MODEL == VAX_MODEL_KA630
 static bool cmd_own_at(uint32_t comm) {
   uint32_t cmd_base = comm + g_rsp_ring.byte_len;
   return (phys_r32(cmd_base + g_cmd_ring.index) & DESC_OWN) != 0;
@@ -447,6 +457,7 @@ static void probe_q22_comm_alias() {
     return;
   }
 }
+#endif
 
 static bool init_comm_area() {
   g_rsp_ring.irq_off = -2;
@@ -596,11 +607,16 @@ static bool fetch_command() {
     return false;
   }
   if (!(desc & DESC_OWN)) {
+#if VAX_MODEL == VAX_MODEL_KA630
     probe_q22_comm_alias();
     if (!read_desc(g_cmd_ring, &desc) || !(desc & DESC_OWN)) {
       g_poll = false;
       return true;
     }
+#else
+    g_poll = false;
+    return true;
+#endif
   }
   uint32_t pkt = q22_expand(desc & DESC_ADDR);
   mscp_dump(DUMP_RING, "cmd own desc=0x%08X pkt=0x%06X idx=%u",
@@ -1036,7 +1052,14 @@ static bool csr_is_sa(uint32_t pa) {
   return o == 0x1C6Au || o == 0x146Au;
 }
 
-bool csr_hit(uint32_t pa) { return csr_is_ip(pa) || csr_is_sa(pa); }
+bool csr_hit(uint32_t pa) {
+#if VAX_MODEL == VAX_MODEL_KA630
+  return csr_is_ip(pa) || csr_is_sa(pa);
+#else
+  (void)pa;
+  return false;  // C4: Unibus 0172150 at 0xFFF468 — do not decode Q22 CSRs
+#endif
+}
 
 uint16_t csr_read(uint32_t pa) {
   uint32_t base = pa & ~1u;

@@ -2,7 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// MicroVAX II–class integer subset interpreter (Phase 2+).
+// VAX integer subset interpreter (Phase 2+).
+// VAX_MODEL_KA630: MicroVAX II (KA630 / UV2). VAX_MODEL_KA750: 11/750 (experimental).
 // Study reference: Open SIMH VAX/ (MIT) — local path in docs/research/isa.md.
 // Not a full ISA yet.
 namespace vax_cpu {
