@@ -29,6 +29,10 @@ bool start_mscp(uint8_t unit);  // 0 = A (dua), 1 = B (dub)
 
 uint8_t boot_unit();
 
+// Host boot-path flag from [system] os= (not a SID lie).
+void set_guest_os_vms(bool vms);
+bool guest_os_vms();
+
 // CPU JSB hook: 750 ROM disk read — R8=LBN, 4(SP)=dest PA; R0 bit0 = OK.
 void rom_disk_read();
 

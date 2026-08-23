@@ -566,7 +566,9 @@ static uint8_t mem_r8(uint32_t pa) {
   // Other Q22 / KA630 local I/O: probes must not sticky-fault (SIE, QIPCR, …).
   if (q22_io_space(phys)) return 0;
 #endif
-  note_fault(2, "pa-r", pa);
+  // NXMEM (e.g. VMS size probe at 16 MB with 8 MB installed). Same class as
+  // Unibus-mem badaddr at 0xFC0000 — MCHK, do not host-abort.
+  raise_mchk(phys, false);
   return 0;
 }
 
@@ -725,12 +727,7 @@ static void mem_w8(uint32_t pa, uint8_t v) {
   // Ignore writes into Q22/local I/O we do not model yet (QIPCR, …).
   if (q22_io_space(phys)) return;
 #endif
-  note_fault(2, "pa-w", pa);
-  static bool logged_pa = false;
-  if (!logged_pa) {
-    logged_pa = true;
-    LOGE("pa-w target VA=%08X PA=%08X", (unsigned)pa, (unsigned)phys);
-  }
+  raise_mchk(phys, true);
 }
 
 static void mem_w16(uint32_t pa, uint16_t v) {
@@ -2706,9 +2703,11 @@ static void exec_one() {
       // 0x5D0002 = 6 MiB; 0x200002 = legacy (unsafe under large kernels).
       // Stock CD BOOT.;1 has e_entry=0 → npc=2; apply_cd_boot_hopp rewrites
       // that to 0x7A0002 after assembling the image (do not rewrite PSL).
-      if (npc < 0x1000u && vax_boot::apply_cd_boot_hopp(&npc))
+      if (npc < 0x1000u && !vax_boot::guest_os_vms() &&
+          vax_boot::apply_cd_boot_hopp(&npc))
         g_st.r[R_PC] = npc;
       const bool boot_entry =
+          !vax_boot::guest_os_vms() &&
           (npc == 0x7A0002u || npc == 0x7D0002u || npc == 0x5D0002u ||
            npc == 0x200002u);
       if (boot_entry) {
@@ -2742,7 +2741,7 @@ static void exec_one() {
           LOG("boot: /boot fingerprint @%06X=%02X (expect 7E smart, 21=blind-corrupt)",
               (unsigned)fp, (unsigned)g_ram[fp]);
         }
-      } else if (npc < 0x1000u) {
+      } else if (npc < 0x1000u && !vax_boot::guest_os_vms()) {
         vax_boot::log_elf_hopp(npc);
       }
       return;

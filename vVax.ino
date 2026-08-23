@@ -254,11 +254,15 @@ static void guest_cold_start() {
     vax_console::inject(cfg.boot_input[i]);
   vax_cpu::cold_boot();
 
-  // Phase 6: NetBSD xxboot FROM750 handoff from configured boot unit.
+  // Phase 6: MSCP block loader (FROM750 xxboot ABI). os= selects guest path.
   uint8_t unit = (cfg.boot_unit == 'b' || cfg.boot_unit == 'B') ? 1 : 0;
+  vax_boot::set_guest_os_vms(cfg.os == GUEST_OS_VMS);
   if (vax_boot::start_mscp(unit)) {
     vax_cpu::run();
-    LOG("guest running (NetBSD xxboot)");
+    if (cfg.os == GUEST_OS_VMS)
+      LOG("guest running (VMS)");
+    else
+      LOG("guest running (NetBSD xxboot)");
   } else {
     LOG("guest halted (no MSCP boot)");
   }

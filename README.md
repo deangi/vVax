@@ -4,7 +4,7 @@ MicroVAX II–class emulator sketch for the **Freenove ESP32-S3 2.8" Display**
 board (same family as vpdp1170 / v8088 / vZ80).
 
 **Status:** V0.6.76 on `main` (MicroVAX II / Phase 6). Branch `vax-11750` is
-**V0.7.1** experimental KA750 (Unibus `/boot`, not the product target).
+**V0.7.2** experimental KA750 (Unibus `/boot`, not the product target).
 Next on main: finish kernel handoff; **Phase 7** host UX; **Phase 8** interpreter
 KIPS (today ~50–100). See [`docs/PHASES.md`](docs/PHASES.md).
 
@@ -37,7 +37,7 @@ See [`docs/TARGET.md`](docs/TARGET.md) and [`docs/PHASES.md`](docs/PHASES.md).
 Copy [`vVaxSdCard/`](vVaxSdCard/) to a FAT32 card:
 
 - `/wificonfig.ini` — WiFi, NTP, Telnet, FTP
-- `/vaxconfig.ini` — RAM, console `boot_text`, disks, clock, ethernet, `[diag]`
+- `/vaxconfig.ini` — RAM, `[system] os=` (netbsd/vms), console `boot_text`, disks, clock, ethernet, `[diag]`
 - `/disks/*.dsk` — user-supplied MSCP images
 - `/firmware/` — user-supplied ROM blobs (not redistributed here)
 

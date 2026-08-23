@@ -198,9 +198,28 @@ void config_apply_ethernet_defaults(AppConfig& cfg) {
   cfg.eth_gateway_ip = 0x0A0B0001u;
 }
 
+const char* config_guest_os_name(GuestOs os) {
+  return os == GUEST_OS_VMS ? "vms" : "netbsd";
+}
+
+static GuestOs parse_guest_os(const String& val, bool* ok) {
+  String v = to_lower(trim(val));
+  if (v == "netbsd" || v == "bsd") {
+    if (ok) *ok = true;
+    return GUEST_OS_NETBSD;
+  }
+  if (v == "vms" || v == "openvms") {
+    if (ok) *ok = true;
+    return GUEST_OS_VMS;
+  }
+  if (ok) *ok = false;
+  return GUEST_OS_NETBSD;
+}
+
 void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.title         = APP_TITLE;
   cfg.ram_mb        = VAX_RAM_MB_DEFAULT;
+  cfg.os            = GUEST_OS_NETBSD;
 
   cfg.wifi_ssid     = WIFI_SSID;
   cfg.wifi_password = WIFI_PASS;
@@ -252,6 +271,15 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
   if (section == "system") {
     if (key == "title") cfg.title = val;
     else if (key == "ram_mb" || key == "memory_mb") cfg.ram_mb = val.toInt();
+    else if (key == "os" || key == "guest_os") {
+      bool ok = false;
+      GuestOs parsed = parse_guest_os(val, &ok);
+      if (!ok) {
+        LOGE("[system] os=%s invalid (use netbsd|bsd|vms|openvms); defaulting to netbsd",
+             val.c_str());
+      }
+      cfg.os = parsed;
+    }
   } else if (section == "wifi") {
     if      (key == "ssid")     cfg.wifi_ssid     = val;
     else if (key == "password") cfg.wifi_password = val;
@@ -357,6 +385,7 @@ bool config_load_wifi(AppConfig& cfg) {
 
 bool config_load_vax(AppConfig& cfg) {
   cfg.title = APP_TITLE;
+  cfg.os = GUEST_OS_NETBSD;
   cfg.disk_a = "";
   cfg.disk_b = "";
   cfg.boot_input_len = 0;
@@ -367,6 +396,7 @@ bool config_load_vax(AppConfig& cfg) {
     LOG("%s not found, writing defaults", VAX_CFG_PATH);
     cfg.title = APP_TITLE;
     cfg.ram_mb = VAX_RAM_MB_DEFAULT;
+    cfg.os = GUEST_OS_NETBSD;
     cfg.disk_a = "";
     cfg.disk_b = "/disks/NetBSD-10.1-vax.iso";
     cfg.boot_unit = 'a';
@@ -429,6 +459,10 @@ bool config_write_default_vax(const AppConfig& cfg) {
   f.printf ("title  = %s\r\n", cfg.title.c_str());
   f.println("; Guest RAM in MB. Allowed: 2, 4, 6, or 8.");
   f.printf ("ram_mb = %d\r\n", cfg.ram_mb);
+  f.println("; Host boot path. netbsd (default) = FROM750 xxboot + CD /boot reloc.");
+  f.println("; vms = same block loader, no NetBSD ELF/hopp/fingerprint/niclose.");
+  f.println("; os = netbsd");
+  f.println("; os = vms");
   f.println();
   f.println("[console]");
   f.println("; VT100 personality (TFT + Telnet + USB). Escaped boot_text:");
@@ -492,7 +526,8 @@ void config_print(const AppConfig& cfg) {
   config_format_ipv4(cfg.eth_gateway_ip, gw, sizeof(gw));
   config_format_mac(cfg.eth_mac, mac, sizeof(mac));
   LOG("---- %s + %s ----", WIFI_CFG_PATH, VAX_CFG_PATH);
-  LOG("[system]  title=\"%s\"  ram_mb=%d", cfg.title.c_str(), cfg.ram_mb);
+  LOG("[system]  title=\"%s\"  ram_mb=%d  os=%s",
+      cfg.title.c_str(), cfg.ram_mb, config_guest_os_name(cfg.os));
   LOG("[wifi]    ssid=\"%s\"  hostname=\"%s\"", cfg.wifi_ssid.c_str(),
       cfg.wifi_hostname.c_str());
   LOG("[telnet]  enabled=%s  port=%d", cfg.telnet_enabled ? "true" : "false",

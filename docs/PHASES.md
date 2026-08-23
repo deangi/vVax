@@ -124,9 +124,15 @@ selftests PASS, xxboot/CD `/boot` reloc still work. **R2 was still `0x20001C68`*
 USB: selftest PASS, xxboot those bootregs, ROM-reads, `/boot` banner, RPB
 `csr=00FFF468`. Then `pa-w VA=00F32FB8` (`BISL3 #0x80000000,(r2)+`).
 
-**V0.7.1:** DW750 maps also at `0xF32800` (512); nexus `0xF00000–0xFC0000`
-writes absorbed. Flash `vax-11750`; USB `vVax V0.7.1`. Success: banner then
-`/boot` MSCP STEP, no `pa-w` at `0xF32FB8`.
+**V0.7.1:** DW750 maps also at `0xF32800` (512); nexus writes absorbed.
+VMS xxboot (not VMB) sized past SID; MCHK `0xFC0000`/`0xFC2000` then **`pa-r
+VA=01000000`** abort.
+
+**V0.7.2:** NXMEM above RAM → MCHK, not `VAX fault 2`. `[system] os=`
+(`netbsd` default / `vms`) selects host boot path (not a SID lie). Flash
+`vax-11750`; USB `vVax V0.7.2`. After the two FC MCHKs expect
+`MCHK pa=01000000` then continue, not `fault 2 (pa-r)`. `os=vms`:
+`guest running (VMS)`, no NetBSD xxboot / ELF hopp.
 
 ## Phase 7 — Host UX parity (vpdp1170)
 

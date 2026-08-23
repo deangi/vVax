@@ -1,10 +1,13 @@
 #pragma once
 #include <Arduino.h>
 
+enum GuestOs : uint8_t { GUEST_OS_NETBSD = 0, GUEST_OS_VMS = 1 };
+
 struct AppConfig {
   // [system] in /vaxconfig.ini
   String title;
   int    ram_mb = 8;   // [system] ram_mb= 2, 4, 6, or 8
+  GuestOs os = GUEST_OS_NETBSD;  // [system] os= netbsd|bsd|vms|openvms
 
   // [wifi] in /wificonfig.ini
   String wifi_ssid;
@@ -69,3 +72,5 @@ bool config_copy_file(const char* src, const char* dst);
 int  config_list_variants(const char* prefix, char names[][44], int max);
 
 void config_print(const AppConfig& cfg);
+
+const char* config_guest_os_name(GuestOs os);

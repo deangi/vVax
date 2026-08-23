@@ -1,4 +1,5 @@
 #include "vax_boot.h"
+#include "appconfig.h"
 #include "config.h"
 #include "vax_cpu.h"
 #include "vax_mscp.h"
@@ -10,6 +11,7 @@
 namespace vax_boot {
 
 static uint8_t g_unit = 0;
+static bool g_os_vms = false;
 static unsigned g_rom_reads = 0;
 static unsigned g_fail_streak = 0;
 static uint32_t g_last_fail_lbn = 0xFFFFFFFFu;
@@ -283,7 +285,12 @@ void plant_ka630_console() {
 
 static uint32_t g_niclose_pa = 0;
 
+void set_guest_os_vms(bool vms) { g_os_vms = vms; }
+
+bool guest_os_vms() { return g_os_vms; }
+
 void plant_boot_stubs(uint32_t boot_base) {
+  if (g_os_vms) return;
   uint8_t* ram = vax_cpu::ram();
   size_t ram_bytes = vax_cpu::ram_bytes();
   // machdep_start `calls $0, niclose` target: boot+0x51FE (not 0xC9CA —
@@ -304,6 +311,7 @@ void plant_boot_stubs(uint32_t boot_base) {
 }
 
 bool is_niclose(uint32_t pa) {
+  if (g_os_vms) return false;
   if (g_niclose_pa && pa == g_niclose_pa) return true;
   // Fallback if plant_boot_stubs did not run (still match relocated /boot).
   static constexpr uint32_t kOff = 0x51FEu;
@@ -425,7 +433,8 @@ void rom_disk_read() {
 
   // xxboot reads ELF hdr into a bounce/stack dest, then PT_LOAD at e_entry
   // or p_vaddr. dest=0 after xxboot reloc is a bounce, not load-at-0.
-  if (ok && ram && read_dest + 52u <= ram_bytes &&
+  // os=vms: no NetBSD CD ELF reloc / hopp.
+  if (!g_os_vms && ok && ram && read_dest + 52u <= ram_bytes &&
       looks_elf(ram + read_dest) && !g_saw_elf) {
     g_saw_elf = true;
     g_elf_hdr_dest = dest;
@@ -467,7 +476,7 @@ void rom_disk_read() {
             (unsigned)(g_cd_hdr_lbn + (g_elf_poff / 512u)));
       }
     }
-  } else if (ok && g_saw_elf && g_load_dest == 0xFFFFFFFFu && dest != g_elf_hdr_dest) {
+  } else if (!g_os_vms && ok && g_saw_elf && g_load_dest == 0xFFFFFFFFu && dest != g_elf_hdr_dest) {
     // Payload dest is e_entry (stock 0) or a linked window — not xxboot stack.
     if (dest < 0x10000u || dest >= 0x5D0000u) {
       g_load_dest = g_cd_reloc ? CD_RELOC_BASE : dest;
@@ -478,7 +487,7 @@ void rom_disk_read() {
   // Assemble PT_LOAD at 0x7A0000 (skip ELF p_offset). p_vaddr dests already
   // redirected. dest=0 bounce uses LBN-from-hdr minus p_offset. ISO dir
   // walks stay at dest=0.
-  if (ok && g_cd_reloc && ram && !iso_walk_lbn(lbn) &&
+  if (!g_os_vms && ok && g_cd_reloc && ram && !iso_walk_lbn(lbn) &&
       g_cd_hdr_lbn != 0xFFFFFFFFu) {
     uint32_t off = 0xFFFFFFFFu;
     uint32_t src_skip = 0;
@@ -534,7 +543,7 @@ void rom_disk_read() {
   }
 
   // NetBSD romstrategy ignores R0 and will spin forever on a bad disk.
-  if (!ok && g_fail_streak == 8) {
+  if (!g_os_vms && !ok && g_fail_streak == 8) {
     LOGE("boot: %u consecutive ROM-read fails (LBN=0x%X). "
          "Unit A has xxboot but no usable FFS (/boot missing)? Halting.",
          g_fail_streak, (unsigned)lbn);
@@ -545,7 +554,7 @@ void rom_disk_read() {
 }
 
 bool apply_cd_boot_hopp(uint32_t* npc) {
-  if (!g_cd_reloc || !npc) return false;
+  if (g_os_vms || !g_cd_reloc || !npc) return false;
   if (*npc != g_elf_entry + 2u) return false;
 
   uint8_t* ram = vax_cpu::ram();
@@ -605,12 +614,14 @@ bool apply_cd_boot_hopp(uint32_t* npc) {
 }
 
 void log_elf_hopp(uint32_t npc) {
+  if (g_os_vms) return;
   LOG("boot: REI -> low PC=%08X (bad ELF e_entry/hoppabort?) e_entry=%08X p_vaddr=%08X load=%08X hopp=%08X",
       (unsigned)npc, (unsigned)g_elf_entry, (unsigned)g_elf_vaddr,
       (unsigned)g_load_dest, (unsigned)(g_elf_entry + 2u));
 }
 
 bool start_mscp(uint8_t unit) {
+  g_os_vms = (cfg.os == GUEST_OS_VMS);
   if (unit >= vax_mscp::UNIT_COUNT) {
     LOGE("boot: bad unit %u", (unsigned)unit);
     return false;
@@ -663,7 +674,7 @@ bool start_mscp(uint8_t unit) {
     return false;
   }
 
-  if (ram[0x0C] == 0 && ram[0x200] == 0) {
+  if (!g_os_vms && ram[0x0C] == 0 && ram[0x200] == 0) {
     LOGE("boot: disk does not look like NetBSD xxboot");
     return false;
   }
@@ -687,9 +698,15 @@ bool start_mscp(uint8_t unit) {
   st.r[vax_cpu::R_SP] = 0x100000u;
   st.r[vax_cpu::R_PC] = 0x0Cu;
 
-  LOG("boot: MSCP %c xxboot FROM750 PC=0x0C R0=%u R1=0x%08X R2=0x%08X R6=0x%08X",
-      'A' + unit, (unsigned)st.r[0], (unsigned)st.r[1],
-      (unsigned)st.r[2], (unsigned)st.r[6]);
+  if (g_os_vms) {
+    LOG("boot: VMS (os=vms; xxboot block loader, no VMB) PC=0x0C R0=%u R1=0x%08X R2=0x%08X R6=0x%08X",
+        (unsigned)st.r[0], (unsigned)st.r[1],
+        (unsigned)st.r[2], (unsigned)st.r[6]);
+  } else {
+    LOG("boot: MSCP %c xxboot FROM750 PC=0x0C R0=%u R1=0x%08X R2=0x%08X R6=0x%08X",
+        'A' + unit, (unsigned)st.r[0], (unsigned)st.r[1],
+        (unsigned)st.r[2], (unsigned)st.r[6]);
+  }
   return true;
 }
 
