@@ -29,7 +29,7 @@ static constexpr uint32_t WCS_END        = 0x00F10000u;
 void reset();
 
 bool reg_hit(uint32_t pa);       // UBA0 CSR + both map windows
-bool nexus_hit(uint32_t pa);     // CMI/nexus 0xF00000..0xFC0000 (absorb)
+bool nexus_hit(uint32_t pa);     // CMI 0xF00000..0xFC0000 (empty TR / hole)
 bool unibus_mem_hit(uint32_t pa);
 bool io_page_hit(uint32_t pa);
 bool wcs_hit(uint32_t pa);

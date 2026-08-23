@@ -134,6 +134,11 @@ VA=01000000`** abort.
 `MCHK pa=01000000` then continue, not `fault 2 (pa-r)`. `os=vms`:
 `guest running (VMS)`, no NetBSD xxboot / ELF hopp.
 
+**V0.7.3:** Empty CMI/nexus read → MCHK, not opcode 0 (`HALT` at `0xFBA000`).
+16 MB probe was likely already MCHK; V0.7.2 only logged the first two.
+Flash `vax-11750`; USB `vVax V0.7.3`. Expect `MCHK pa=01000000` and
+`MCHK pa=00FBA000` (no silent HALT). Still no VMB/console ROM.
+
 ## Phase 7 — Host UX parity (vpdp1170)
 
 Mirror the common Freenove emulator host stack from **vpdp1170** (same `host_lib` family). Guest console Telnet/FTP/WiFi/INI already work; this phase fills the operator UX gaps.

@@ -25,6 +25,7 @@ static uint32_t g_trace_left = 0;
 static bool     g_logged_stop = false;
 static uint32_t g_last_op_pc = 0;
 static bool     g_mmgt_abort = false;  // instruction aborted into ACV/TNV
+static bool     g_in_ifetch = false;   // I-stream (not operand) access
 static uint32_t g_mmgt_log_left = 8;
 static int      g_xlat_mode_ov = -1;  // CHMx dest-mode writes (SIMH acc = ACC_MASK(mode))
 static uint32_t cpu_cur_mode() {
@@ -244,7 +245,7 @@ static bool q22_window_to_host(uint32_t phys, uint32_t* host) {
 }
 #endif  // VAX_MODEL_KA630
 
-static uint32_t g_mchk_log_left = 2;
+static uint32_t g_mchk_log_left = 16;
 
 // MSCP DMA / rings: Q22 maps (KA630) or UBA 18-bit maps (KA750); else identity.
 static uint32_t mscp_ba_to_host(uint32_t ba) {
@@ -522,8 +523,13 @@ static uint8_t mem_r8(uint32_t pa) {
     return (phys & 1) ? (uint8_t)(w >> 8) : (uint8_t)w;
   }
 #if VAX_MODEL == VAX_MODEL_KA750
-  if (vax_uba::reg_hit(phys))
+  if (vax_uba::reg_hit(phys)) {
+    if (g_in_ifetch) {
+      raise_mchk(phys, false);
+      return 0;
+    }
     return vax_uba::read8(phys);
+  }
   if (vax_uba::unibus_mem_hit(phys)) {
     uint32_t host = 0;
     if (vax_uba::map_unimem(phys, &host) && pa_ok(host, 1))
@@ -531,9 +537,21 @@ static uint8_t mem_r8(uint32_t pa) {
     raise_mchk(phys, false);
     return 0;
   }
-  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys) ||
-      vax_uba::nexus_hit(phys))
+  // I-fetch from I/O or WCS is not instruction memory (0x00 = HALT).
+  if (g_in_ifetch &&
+      (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))) {
+    raise_mchk(phys, false);
     return 0;
+  }
+  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))
+    return 0;
+  // Empty CMI/nexus / reserved / hole 0xF80000–0xFC0000: SIMH ReadReg
+  // timeout + MACH_CHECK (vax750_cmi.c). Returning 0 made I-fetch HALT
+  // (V0.7.2 PC=0xFBA000). Same class as Unibus-mem badaddr at 0xFC0000.
+  if (vax_uba::nexus_hit(phys)) {
+    raise_mchk(phys, false);
+    return 0;
+  }
 #endif
 #if VAX_MODEL == VAX_MODEL_KA630
   if (phys >= KA630_SIE_PA && phys < KA630_SIE_PA + 4u) {
@@ -758,7 +776,9 @@ static void mem_w32(uint32_t pa, uint32_t v) {
 static uint8_t fetch8() {
   if (g_mmgt_abort) return 0;
   uint32_t pc = g_st.r[R_PC];
+  g_in_ifetch = true;
   uint8_t v = mem_r8(pc);
+  g_in_ifetch = false;
   if (g_mmgt_abort) return 0;
   g_st.r[R_PC] = pc + 1;
   return v;
@@ -766,7 +786,9 @@ static uint8_t fetch8() {
 
 static uint16_t fetch16() {
   if (g_mmgt_abort) return 0;
+  g_in_ifetch = true;
   uint16_t v = mem_r16(g_st.r[R_PC]);
+  g_in_ifetch = false;
   if (g_mmgt_abort) return 0;
   g_st.r[R_PC] += 2;
   return v;
@@ -774,7 +796,9 @@ static uint16_t fetch16() {
 
 static uint32_t fetch32() {
   if (g_mmgt_abort) return 0;
+  g_in_ifetch = true;
   uint32_t v = mem_r32(g_st.r[R_PC]);
+  g_in_ifetch = false;
   if (g_mmgt_abort) return 0;
   g_st.r[R_PC] += 4;
   return v;
@@ -2261,6 +2285,7 @@ static void raise_mmgt(uint32_t va, bool write) {
 // MicroVAX param block (byte count 12 + 3 longs). Do not sticky-fault.
 static void raise_mchk(uint32_t pa, bool write) {
   if (g_mmgt_abort) return;
+  g_in_ifetch = false;
 
   const uint32_t fault_pc = g_last_op_pc ? g_last_op_pc : g_st.r[R_PC];
 
@@ -5213,7 +5238,7 @@ void reset() {
 #else
       2;
 #endif
-  g_mchk_log_left = 2;
+  g_mchk_log_left = 16;
 #if VAX_MODEL == VAX_MODEL_KA630
   g_logged_q22_map = false;
   g_logged_q22_dma = false;
@@ -5366,7 +5391,7 @@ void run() {
 #else
       2;
 #endif
-  g_mchk_log_left = 2;
+  g_mchk_log_left = 16;
 #if VAX_MODEL == VAX_MODEL_KA630
   g_logged_q22_map = false;
   g_logged_q22_dma = false;

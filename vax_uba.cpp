@@ -90,7 +90,7 @@ void write8(uint32_t pa, uint8_t v) {
     }
     return;
   }
-  // CSR / empty nexus slot: ignore (do not pa-w).
+  // CSR / empty nexus slot: ignore write (SIMH WriteReg timeout, not MCHK).
 }
 
 #else
