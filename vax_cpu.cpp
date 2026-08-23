@@ -531,7 +531,8 @@ static uint8_t mem_r8(uint32_t pa) {
     raise_mchk(phys, false);
     return 0;
   }
-  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))
+  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys) ||
+      vax_uba::nexus_hit(phys))
     return 0;
 #endif
 #if VAX_MODEL == VAX_MODEL_KA630
@@ -689,7 +690,8 @@ static void mem_w8(uint32_t pa, uint8_t v) {
     raise_mchk(phys, true);
     return;
   }
-  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))
+  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys) ||
+      vax_uba::nexus_hit(phys))
     return;
 #endif
 #if VAX_MODEL == VAX_MODEL_KA630

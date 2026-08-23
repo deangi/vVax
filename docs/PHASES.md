@@ -120,10 +120,13 @@ no Q22 map alloc, clock `PASS (TODR=…)` without TOY chip line, no conspage pla
 selftests PASS, xxboot/CD `/boot` reloc still work. **R2 was still `0x20001C68`**
 (Q22). Autoboot countdown at `PC=007A04A1`. Guest MSCP was dead (`csr_hit` false).
 
-**V0.7.0:** C6 bootregs R1=`0xF30000` / R2=`0xFFF468`; C4 Unibus UDA IP/SA at
-those PAs (no Q22 alias); C3-start DW750 maps @ `0xF30800` (512, valid
-`0x80000000`) and I/O page `0xFFE000`. Not a nexus/`cmi0` attach. Flash
-`vax-11750`; USB should say `vVax V0.7.0` and `R2=0x00FFF468`.
+**V0.7.0:** C6 R1=`0xF30000` / R2=`0xFFF468`; Unibus UDA; maps @ `0xF30800`.
+USB: selftest PASS, xxboot those bootregs, ROM-reads, `/boot` banner, RPB
+`csr=00FFF468`. Then `pa-w VA=00F32FB8` (`BISL3 #0x80000000,(r2)+`).
+
+**V0.7.1:** DW750 maps also at `0xF32800` (512); nexus `0xF00000–0xFC0000`
+writes absorbed. Flash `vax-11750`; USB `vVax V0.7.1`. Success: banner then
+`/boot` MSCP STEP, no `pa-w` at `0xF32FB8`.
 
 ## Phase 7 — Host UX parity (vpdp1170)
 
