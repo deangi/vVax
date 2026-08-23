@@ -1,17 +1,23 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "config.h"
 
 // RQDX3 / UDA50-class MSCP port: dual units (dua/dub) on SD images.
 // KA630: Q22 CSR 0172150/0172152. /boot RPB uses 0x20001C68; kernel uba maps
 // the 8K I/O page as 0x20000000+(csr-0160000) → 0x20001468. Both must decode.
-// KA750: csr_hit is off (no Q22 decode). Unibus 0xFFF468 is C4.
+// KA750: Unibus 0172150 at 0xFFF468 / 0xFFF46A only. No Q22 dual-alias.
 namespace vax_mscp {
 
 enum Unit : uint8_t { UNIT_A = 0, UNIT_B = 1, UNIT_COUNT = 2 };
 
+#if VAX_MODEL == VAX_MODEL_KA750
+static constexpr uint32_t CSR_IP_PA = 0x00FFF468u;  // IOPAGEBASE+0x1468
+static constexpr uint32_t CSR_SA_PA = 0x00FFF46Au;
+#else
 static constexpr uint32_t CSR_IP_PA = 0x20001C68u;
 static constexpr uint32_t CSR_SA_PA = 0x20001C6Au;
+#endif
 
 // Diagnostic dump categories for [diag] mscp_dump_flags=
 enum DumpFlags : uint32_t {

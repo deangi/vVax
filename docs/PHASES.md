@@ -113,8 +113,17 @@ Do not treat stubs as a runnable VAX ISA yet.
 ## 11/750 conversion (branch `vax-11750`)
 
 Work lives on branch `vax-11750` and is specified by [`VAX11750.md`](VAX11750.md).
-C0/C1 (compile-time `VAX_MODEL`, SID/IPR stubs, no Q22 decode on 750) in progress.
-Product target in [`TARGET.md`](TARGET.md) remains MicroVAX II until a 750 drop is the product.
+Product target in [`TARGET.md`](TARGET.md) remains MicroVAX II.
+
+**V0.6.76 flash (Aug 23 2026 12:17:01):** C0/C1/C2 confirmed — `VAX model: KA750`,
+no Q22 map alloc, clock `PASS (TODR=…)` without TOY chip line, no conspage plant,
+selftests PASS, xxboot/CD `/boot` reloc still work. **R2 was still `0x20001C68`**
+(Q22). Autoboot countdown at `PC=007A04A1`. Guest MSCP was dead (`csr_hit` false).
+
+**V0.7.0:** C6 bootregs R1=`0xF30000` / R2=`0xFFF468`; C4 Unibus UDA IP/SA at
+those PAs (no Q22 alias); C3-start DW750 maps @ `0xF30800` (512, valid
+`0x80000000`) and I/O page `0xFFE000`. Not a nexus/`cmi0` attach. Flash
+`vax-11750`; USB should say `vVax V0.7.0` and `R2=0x00FFF468`.
 
 ## Phase 7 — Host UX parity (vpdp1170)
 

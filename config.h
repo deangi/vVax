@@ -4,7 +4,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.6.76"
+#define APP_VERSION     "V0.7.0"
 // Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
 // rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)
@@ -74,8 +74,8 @@
 
 // Compile-time guest CPU. One machine per firmware image — not a runtime switch.
 // main / KA630 firmware stays MicroVAX II. This branch builds KA750 (11/750).
-// Experimental: C0/C1 only; not a flashable guest-OS machine yet. Do not bump
-// APP_VERSION until a real 750 drop exists (see docs/VAX11750.md).
+// V0.7.0 is the experimental 750 drop (C3/C4/C6 Unibus /boot). Not GENERIC
+// cmi0/uda0 yet. Product target in TARGET.md remains MicroVAX II.
 #define VAX_MODEL_KA630  630
 #define VAX_MODEL_KA750  750
 #define VAX_MODEL        VAX_MODEL_KA750

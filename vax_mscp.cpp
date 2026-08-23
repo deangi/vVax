@@ -563,7 +563,11 @@ static void service_init() {
         g_state = State::Run;
         g_poll = true;
         mscp_dump(DUMP_INIT, "GO -> Run");
+#if VAX_MODEL == VAX_MODEL_KA750
+        LOG("MSCP: dma=UBA/18-bit (Unibus maps; no Q22 window)");
+#else
         LOG("MSCP: V0.6.1 dma=PAMASK/Q22 (expect DMA raw= lines on disk I/O)");
+#endif
       }
       break;
     default:
@@ -1030,36 +1034,39 @@ static void service_transport() {
 
 // ---- CSR / poll / IRQ ----
 
-// 8K Q22 I/O page at 0x20000000: RPB/KA630 packed 0x1C68, and
-// 0172150-0160000=0x1468. Must NOT match those offsets in guest RAM —
-// /boot BSS and ca_rspdsc sit around 0x007Bxxxx; 0x007B1C68 was decoding
-// as IP and a wait-loop write became hard init (state=0, spin at 0x7A1E7B).
+// Must NOT match those offsets in guest RAM — /boot BSS and ca_rspdsc sit
+// around 0x007Bxxxx; 0x007B1C68 was decoding as IP (V0.6.19).
 static uint32_t csr_io_off(uint32_t pa) { return pa & 0x1FFEu; }
 
 static bool csr_in_io_page(uint32_t pa) {
-  return (pa & 0x3FFFE000u) == 0x20000000u;
+#if VAX_MODEL == VAX_MODEL_KA750
+  return (pa & 0xFFFFE000u) == 0x00FFE000u;  // Unibus I/O page
+#else
+  return (pa & 0x3FFFE000u) == 0x20000000u;  // Q22 8K I/O page
+#endif
 }
 
 static bool csr_is_ip(uint32_t pa) {
   if (!csr_in_io_page(pa)) return false;
   uint32_t o = csr_io_off(pa);
+#if VAX_MODEL == VAX_MODEL_KA750
+  return o == 0x1468u;  // 0172150 only — no Q22 0x1C68 alias
+#else
   return o == 0x1C68u || o == 0x1468u;
+#endif
 }
 
 static bool csr_is_sa(uint32_t pa) {
   if (!csr_in_io_page(pa)) return false;
   uint32_t o = csr_io_off(pa);
-  return o == 0x1C6Au || o == 0x146Au;
-}
-
-bool csr_hit(uint32_t pa) {
-#if VAX_MODEL == VAX_MODEL_KA630
-  return csr_is_ip(pa) || csr_is_sa(pa);
+#if VAX_MODEL == VAX_MODEL_KA750
+  return o == 0x146Au;
 #else
-  (void)pa;
-  return false;  // C4: Unibus 0172150 at 0xFFF468 — do not decode Q22 CSRs
+  return o == 0x1C6Au || o == 0x146Au;
 #endif
 }
+
+bool csr_hit(uint32_t pa) { return csr_is_ip(pa) || csr_is_sa(pa); }
 
 uint16_t csr_read(uint32_t pa) {
   uint32_t base = pa & ~1u;

@@ -673,7 +673,13 @@ bool start_mscp(uint8_t unit) {
 #endif
 
   st.r[0] = BDEV_UDA;
+#if VAX_MODEL == VAX_MODEL_KA750
+  // NetBSD FROM750 / SIMH vax750: R1 = DW750 UBA phys, R2 = Unibus UDA CSR.
+  // Do not keep R1=0x20000000 (that is Q22 qba). See docs/VAX11750.md §3.
+  st.r[1] = 0x00F30000u;
+#else
   st.r[1] = 0x20000000u;
+#endif
   st.r[2] = vax_mscp::CSR_IP_PA;
   st.r[3] = unit;
   st.r[5] = 0;
@@ -681,8 +687,9 @@ bool start_mscp(uint8_t unit) {
   st.r[vax_cpu::R_SP] = 0x100000u;
   st.r[vax_cpu::R_PC] = 0x0Cu;
 
-  LOG("boot: MSCP %c xxboot FROM750 PC=0x0C R0=%u R2=0x%08X R6=0x%08X",
-      'A' + unit, (unsigned)st.r[0], (unsigned)st.r[2], (unsigned)st.r[6]);
+  LOG("boot: MSCP %c xxboot FROM750 PC=0x0C R0=%u R1=0x%08X R2=0x%08X R6=0x%08X",
+      'A' + unit, (unsigned)st.r[0], (unsigned)st.r[1],
+      (unsigned)st.r[2], (unsigned)st.r[6]);
   return true;
 }
 

@@ -5,6 +5,7 @@
 #include "vax_clock.h"
 #include "vax_mscp.h"
 #include "vax_boot.h"
+#include "vax_uba.h"
 #include "platform.h"
 
 #include <Arduino.h>
@@ -245,7 +246,7 @@ static bool q22_window_to_host(uint32_t phys, uint32_t* host) {
 
 static uint32_t g_mchk_log_left = 2;
 
-// MSCP DMA / rings: follow Q22 maps when valid (KA630); else identity.
+// MSCP DMA / rings: Q22 maps (KA630) or UBA 18-bit maps (KA750); else identity.
 static uint32_t mscp_ba_to_host(uint32_t ba) {
 #if VAX_MODEL == VAX_MODEL_KA630
   if (g_q22map) {
@@ -260,6 +261,20 @@ static uint32_t mscp_ba_to_host(uint32_t ba) {
       return host;
     }
   }
+#elif VAX_MODEL == VAX_MODEL_KA750
+  uint32_t host = 0;
+  if (vax_uba::map_ba(ba, &host)) {
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      LOG("UBA DMA map ba=%08X -> pa=%08X", (unsigned)ba, (unsigned)host);
+    }
+    return host;
+  }
+  // /boot may put a guest phys in the descriptor before maps are valid.
+  if ((ba & 0x3FFFFFFFu) < g_ram_bytes)
+    return ba & 0x3FFFFFFFu;
+  return ba & 0x3FFFFu;
 #endif
   return ba & 0x3FFFFFFFu;
 }
@@ -506,6 +521,19 @@ static uint8_t mem_r8(uint32_t pa) {
     uint16_t w = vax_mscp::csr_read(phys & ~1u);
     return (phys & 1) ? (uint8_t)(w >> 8) : (uint8_t)w;
   }
+#if VAX_MODEL == VAX_MODEL_KA750
+  if (vax_uba::reg_hit(phys))
+    return vax_uba::read8(phys);
+  if (vax_uba::unibus_mem_hit(phys)) {
+    uint32_t host = 0;
+    if (vax_uba::map_unimem(phys, &host) && pa_ok(host, 1))
+      return g_ram[host];
+    raise_mchk(phys, false);
+    return 0;
+  }
+  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))
+    return 0;
+#endif
 #if VAX_MODEL == VAX_MODEL_KA630
   if (phys >= KA630_SIE_PA && phys < KA630_SIE_PA + 4u) {
     unsigned sh = (unsigned)(phys - KA630_SIE_PA) * 8u;
@@ -589,10 +617,16 @@ static bool plant_rpb_csrphy(uint32_t va) {
   if (!g_ram || (uint64_t)pa + 104u > g_ram_bytes) return false;
   uint8_t  devtyp  = g_ram[pa + 102];
   uint32_t old_csr = phys_r32(pa + 84);
+#if VAX_MODEL == VAX_MODEL_KA750
+  if (devtyp != 17u && old_csr != 0x00FFF468u && old_csr != 0x20001C68u)
+    return false;
+  const uint32_t csr = 0x00FFF468u;
+#else
   if (devtyp != 17u && old_csr != 0x20001C68u)
     return false;
-  uint32_t old_base = phys_r32(pa);
   const uint32_t csr = 0x20001468u;
+#endif
+  uint32_t old_base = phys_r32(pa);
   phys_w32(pa + 84, csr);
   if (devtyp != 17u)
     g_ram[pa + 102] = 17u;
@@ -641,6 +675,23 @@ static void mem_w8(uint32_t pa, uint8_t v) {
     vax_mscp::csr_write(phys & ~1u, w);
     return;
   }
+#if VAX_MODEL == VAX_MODEL_KA750
+  if (vax_uba::reg_hit(phys)) {
+    vax_uba::write8(phys, v);
+    return;
+  }
+  if (vax_uba::unibus_mem_hit(phys)) {
+    uint32_t host = 0;
+    if (vax_uba::map_unimem(phys, &host) && pa_ok(host, 1)) {
+      g_ram[host] = v;
+      return;
+    }
+    raise_mchk(phys, true);
+    return;
+  }
+  if (vax_uba::io_page_hit(phys) || vax_uba::wcs_hit(phys))
+    return;
+#endif
 #if VAX_MODEL == VAX_MODEL_KA630
   if (vax_clock::toy_hit(phys)) {
     vax_clock::toy_write8(phys, v);
@@ -2269,8 +2320,14 @@ static void raise_mchk(uint32_t pa, bool write) {
   }
 }
 
+#if VAX_MODEL == VAX_MODEL_KA750
+static constexpr uint8_t MSCP_IPL = 21;  // SIMH IPL_RQ 0x15 on DW750
+#else
+static constexpr uint8_t MSCP_IPL = 14;
+#endif
+
 static void service_interrupts() {
-  // Priority: clock (IPL 24), console RX/TX (IPL 20), MSCP/UQSSP (IPL 14).
+  // Priority: clock (IPL 24), console RX/TX (IPL 20), MSCP (UQSSP vec).
   if (vax_clock::irq_clk()) {
     uint32_t before = g_st.irq_count;
     try_deliver_irq(0xC0, 24);
@@ -2295,7 +2352,7 @@ static void service_interrupts() {
     // vector is 0x1FC (uh_lastiv=0x200). An 8-bit cap dropped it, so
     // udamatch never hit scb_stray → "uda0 ... didn't interrupt".
     if (vec && vec < 0x400u) {
-      if (14u <= cur_ipl() && vax_mscp::host_online_wait() &&
+      if (MSCP_IPL <= cur_ipl() && vax_mscp::host_online_wait() &&
           g_mscp_blocked_logs) {
         g_mscp_blocked_logs--;
         LOG("MSCP irq blocked IPL=%u vec=0x%03X PC=%08X",
@@ -2303,7 +2360,7 @@ static void service_interrupts() {
       }
       uint32_t from_pc = g_st.r[R_PC];
       uint32_t before = g_st.irq_count;
-      try_deliver_irq(vec, 14);
+      try_deliver_irq(vec, MSCP_IPL);
       if (g_st.irq_count != before) {
         vax_mscp::irq_clear();
         if (g_mscp_irq_logs) {
@@ -4269,9 +4326,8 @@ static void exec_one() {
               (unsigned)need, (unsigned)g_st.r[9], (unsigned)g_kernel_load_end);
           g_st.r[9] = need;
         }
-        // /boot MSCP CSR is 0x20001C68; kernel uba maps 0172150 → 0x20001468.
-        // Plant only the CALLS prpb. R11 is boothowto (3); KERNBASE is the
-        // SCB until scb_init(). pmap copies the uarea RPB onto PA 0 after.
+        // Plant only the CALLS prpb. KA630 kernel uba wants 0x20001468;
+        // KA750 Unibus UDA is 0xFFF468. R11 is boothowto (3).
         if (!g_planted_kernel_csr && g_ram) {
           uint32_t prpb = mem_r32(g_st.r[R_SP]);
           plant_rpb_csrphy(prpb);
@@ -5116,7 +5172,7 @@ bool init(size_t ram_bytes) {
   memset(g_ram, 0, g_ram_bytes);
   LOG("VAX RAM: %u bytes @ %p (PSRAM)", (unsigned)g_ram_bytes, (void*)g_ram);
 #if VAX_MODEL == VAX_MODEL_KA750
-  LOG("VAX model: KA750 (experimental 11/750; C0/C1)");
+  LOG("VAX model: KA750 (experimental 11/750; C3/C4/C6)");
 #else
   LOG("VAX model: KA630 MicroVAX II");
 #endif
@@ -5135,6 +5191,9 @@ bool init(size_t ram_bytes) {
 #endif
   vax_mmu::set_phys_ops(phys_r32, phys_w32);
   vax_mscp::set_phys_ops(mscp_phys_r8, mscp_phys_w8);
+#if VAX_MODEL == VAX_MODEL_KA750
+  vax_uba::reset();
+#endif
   reset();
   return true;
 }
@@ -5166,6 +5225,9 @@ void reset() {
   g_hb_last_ms = 0;
   g_hb_last_instr = 0;
   g_hb_hold = false;
+#if VAX_MODEL == VAX_MODEL_KA750
+  vax_uba::reset();
+#endif
   vax_mmu::reset();
 }
 
