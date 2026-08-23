@@ -176,14 +176,23 @@ bool toy_hit(uint32_t pa) {
 }
 
 uint8_t toy_read8(uint32_t pa) {
+#if VAX_MODEL != VAX_MODEL_KA630
+  (void)pa;
+  return 0;
+#else
   if (!toy_hit(pa)) return 0;
   const unsigned off = pa - KA630_TOY_PA;
   const unsigned idx = off / 2u;
   const uint16_t w = g_toy[idx];
   return (off & 1u) ? (uint8_t)(w >> 8) : (uint8_t)w;
+#endif
 }
 
 void toy_write8(uint32_t pa, uint8_t v) {
+#if VAX_MODEL != VAX_MODEL_KA630
+  (void)pa;
+  (void)v;
+#else
   if (!toy_hit(pa)) return;
   const unsigned off = pa - KA630_TOY_PA;
   const unsigned idx = off / 2u;
@@ -194,6 +203,7 @@ void toy_write8(uint32_t pa, uint8_t v) {
     g_toy[idx] = (uint16_t)((g_toy[idx] & 0xFF00u) | v);
   if (!g_todr_set)
     toy_sync_todr();
+#endif
 }
 
 uint32_t iccs_rd() {
