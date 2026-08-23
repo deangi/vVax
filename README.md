@@ -4,8 +4,8 @@ MicroVAX II–class emulator sketch for the **Freenove ESP32-S3 2.8" Display**
 board (same family as vpdp1170 / v8088 / vZ80).
 
 **Status:** V0.6.1 — Phase 6 NetBSD xxboot/`/boot` (FROM750, no proprietary ROM).
-Next: finish kernel handoff; **Phase 7** host UX parity with vpdp1170
-(status line, touch GUI, Telnet shell). See [`docs/PHASES.md`](docs/PHASES.md).
+Next: finish kernel handoff; **Phase 7** host UX; **Phase 8** interpreter KIPS
+(today ~50–100). See [`docs/PHASES.md`](docs/PHASES.md).
 
 ## Board / build
 

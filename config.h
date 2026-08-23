@@ -4,8 +4,9 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.6.37"
-// Unique every compile so Arduino "already in flash" skips are obvious.
+#define APP_VERSION     "V0.6.76"
+// Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
+// rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)
 
 // Freenove 2.8" only. LovyanGFX / CrowPanel is not built in this tree.
@@ -57,6 +58,19 @@
 #define VAX_RAM_MB_DEFAULT  8
 #define VAX_RAM_MB_MAX      8
 #define vax_ram_mb_ok(mb)   ((mb) == 2 || (mb) == 4 || (mb) == 6 || (mb) == 8)
+
+// ---- Guest diagnostics (USB serial [vVax] lines) ----
+// 0 = quiet (default): milestones, errors, suspicious ACV (kernel PSL at user PC)
+// 1 = boot debug: kprobe, limited MSCP DMA, repair/REI logs
+// 2 = verbose: all ACV, DMA/xfer/load, frequent heartbeats
+#define VVAX_DIAG_LEVEL 0
+
+// Idle clock warp during kernel boot waits (config_finalize / ra_putonline).
+// Compile-time only: 0 = omitted from exec_one (default); 1 = enable boot warp.
+#define VAX_CLOCK_WARP_DEFAULT  0
+
+// Guest instructions per loop() when running. Was 1000 + delay(1).
+#define VVAX_STEP_BATCH         10000
 
 // ---- Network ----
 #define TELNET_PORT     23

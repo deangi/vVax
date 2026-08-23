@@ -16,6 +16,7 @@
 
 #include "config.h"
 #include "platform.h"
+#include "version.h"
 #include "secrets.h"
 #include "appconfig.h"
 #include "console.h"
@@ -59,10 +60,10 @@ static void tft_banner() {
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
   tft.setTextFont(2);
   tft.setCursor(4, 4);
-  tft.printf("%s  %s", APP_TITLE, APP_VERSION);
+  tft.printf("%s  %s", vvax_app_title(), vvax_app_version());
   tft.setCursor(4, 22);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  tft.printf("build %s  MicroVAX II", APP_BUILD_DATE);
+  tft.printf("build %s  MicroVAX II", vvax_build_date());
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
@@ -149,8 +150,14 @@ static void sd_and_config_init() {
 
 static void mount_mscp_drives() {
   vax_mscp::begin();
+#if VVAX_DIAG_LEVEL == 0
+  vax_mscp::set_dump(0, 0);
+  if (cfg.mscp_dump_count)
+    LOG("MSCP dump ignored (VVAX_DIAG_LEVEL 0)");
+#else
   vax_mscp::set_dump(vax_mscp::parse_dump_flags(cfg.mscp_dump_flags.c_str()),
                      cfg.mscp_dump_count);
+#endif
   char line[48];
   int mounted = 0;
   if (cfg.disk_a.length()) {
@@ -274,8 +281,10 @@ static void start_net_task() {
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
-  LOG("%s %s build %s", APP_TITLE, APP_VERSION, APP_BUILD_DATE);
+  // USB CDC on the S3 enumerates after begin(); without this the version
+  // line is already gone when the host port appears.
+  delay(2000);
+  vvax_log_banner();
 
   strip.begin();
   led(0, 0, 32);
@@ -360,7 +369,8 @@ void loop() {
   if (guest_ready) {
     static uint32_t live_ms = 0;
     uint32_t now = millis();
-    if (now - live_ms >= 10000u) {
+#if VVAX_DIAG_LEVEL >= 1
+    if (now - live_ms >= 30000u) {
       live_ms = now;
       vax_cpu::State& st = vax_cpu::state();
       LOG("live: PC=%08X SP=%08X run=%u halt=%u MAPEN=%u",
@@ -368,11 +378,14 @@ void loop() {
           vax_cpu::running() ? 1u : 0u, st.halt ? 1u : 0u,
           vax_mmu::mapen() ? 1u : 0u);
     }
+#endif
     vax_console::poll();
     if (cfg.clock_enabled) vax_clock::poll();
     vax_mscp::poll();
-    if (vax_cpu::running())
-      vax_cpu::step(5000);
+    if (vax_cpu::running()) {
+      vax_cpu::step(VVAX_STEP_BATCH);
+      return;
+    }
   }
 
   delay(1);

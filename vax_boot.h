@@ -32,6 +32,14 @@ uint8_t boot_unit();
 // CPU JSB hook: 750 ROM disk read — R8=LBN, 4(SP)=dest PA; R0 bit0 = OK.
 void rom_disk_read();
 
+// V0.6.76: stock CD BOOT.;1 has e_entry=0 / p_vaddr=0x7D0000 → hopp PC=2.
+// Host places PT_LOAD (skip p_offset) at 0x7A0000 and remaps 0x7D→0x7A
+// (same as HDD /boot; never 0x200000). hoppabort e_entry+2 → 0x7A0002 (and R6).
+bool apply_cd_boot_hopp(uint32_t* npc);
+
+// Log-only fallback when a low-PC REI is not the CD reloc case.
+void log_elf_hopp(uint32_t npc);
+
 // Plant conspage + NVR pointer so UV2 /boot uses host console, not missing ROM.
 void plant_ka630_console();
 

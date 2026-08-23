@@ -501,6 +501,7 @@ void config_print(const AppConfig& cfg) {
       cfg.disk_a.c_str(), cfg.disk_b.c_str(), cfg.boot_unit);
   LOG("[ethernet] enabled=%s  mac=%s  guest=%s/%s  gateway=%s",
       cfg.eth_enabled ? "true" : "false", mac, ip, mask, gw);
+  LOG("[clock]   enabled=%s", cfg.clock_enabled ? "true" : "false");
   LOG("[diag]    mscp_dump_flags=\"%s\"  mscp_dump_count=%lu",
       cfg.mscp_dump_flags.c_str(), (unsigned long)cfg.mscp_dump_count);
 }

@@ -11,8 +11,13 @@ enum {
 
 void begin();
 void reset();
-void poll();                 // 100 Hz tick from host millis; refresh TODR
+void poll();                 // 100 Hz tick from host millis
 void force_tick();           // one extra 10 ms tick (idle-warp during boot)
+
+// KA630 TOY clock chip @ 0x200B8000 (NetBSD chip_gettime).
+bool     toy_hit(uint32_t pa);
+uint8_t  toy_read8(uint32_t pa);
+void     toy_write8(uint32_t pa, uint8_t v);
 
 uint32_t ticks();
 void get_toy(uint8_t* y, uint8_t* mon, uint8_t* d,

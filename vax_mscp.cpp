@@ -112,6 +112,8 @@ static bool     g_poll = false;
 static bool     g_cmd_valid = false;
 static bool     g_rsp_valid = false;
 static bool     g_irq_latched = false;
+static bool     g_in_doorbell = false;   // IP-read is servicing rings
+static uint16_t g_irq_defer = 0;         // guest insns until latch_irq
 static bool     g_host_online_wait = false;
 static bool     g_first_rsp = true;
 static uint8_t  g_rsp_delay = 0;
@@ -325,9 +327,23 @@ static void hard_init_controller() {
   g_comm = 0;
   g_q22_high = 0;
   g_logged_s0_dma = false;
-  g_dma_log_left = 40;
+  g_dma_log_left =
+#if VVAX_DIAG_LEVEL >= 2
+      40;
+#elif VVAX_DIAG_LEVEL >= 1
+      8;
+#else
+      0;
+#endif
   g_load_sectors = 0;
-  g_load_log_next = 128;
+  g_load_log_next =
+#if VVAX_DIAG_LEVEL >= 2
+      128u;
+#elif VVAX_DIAG_LEVEL >= 1
+      512u;
+#else
+      0xFFFFFFFFu;
+#endif
   g_rsp_own_logged = false;
   g_ie = false;
   g_purge = false;
@@ -335,6 +351,8 @@ static void hard_init_controller() {
   g_cmd_valid = false;
   g_rsp_valid = false;
   g_irq_latched = false;
+  g_in_doorbell = false;
+  g_irq_defer = 0;
   g_host_online_wait = false;
   g_first_rsp = true;
   g_rsp_delay = 0;
@@ -346,13 +364,10 @@ static void hard_init_controller() {
   g_rsp_len = 0;
   g_xfer = Xfer{};
   for (int i = 0; i < UNIT_COUNT; i++) g_drv[i].online = false;
-  // Kernel UQSSP init happens after /boot exhausted the dump budget.
-  if (g_dump_flags && g_dump_left < 80u)
-    g_dump_left = 80;
   mscp_dump(DUMP_INIT, "hard_init SA=0x%04X", g_sa);
 }
 
-static void latch_irq() {
+static void latch_irq_now() {
   if (!(g_ie && g_vec)) return;
   bool was = g_irq_latched;
   g_irq_latched = true;
@@ -363,6 +378,23 @@ static void latch_irq() {
           g_vec, (unsigned)vax_clock::ticks(),
           (unsigned)vax_cpu::state().r[vax_cpu::R_PC]);
   }
+}
+
+// NetBSD rx_putonline: IP-poll then tsleep. Completing ONLINE inside that
+// IP-read delivers the IRQ on the next insn, so wakeup runs before tsleep.
+static void latch_irq() {
+  if (!(g_ie && g_vec)) return;
+  if (g_in_doorbell) {
+    if (g_irq_defer == 0) {
+      g_irq_defer = 256;
+      if (g_host_online_wait)
+        LOG("MSCP IRQ defer 256 wait=1 ticks=%u PC=%08X",
+            (unsigned)vax_clock::ticks(),
+            (unsigned)vax_cpu::state().r[vax_cpu::R_PC]);
+    }
+    return;
+  }
+  latch_irq_now();
 }
 
 static void ring_soft_flag(const Ring& ring) {
@@ -1016,7 +1048,9 @@ uint16_t csr_read(uint32_t pa) {
     if (g_state == State::Step3PurgeIp) begin_step4();
     if (g_state == State::Run || g_xfer.active || g_rsp_valid || g_cmd_valid) {
       g_poll = true;
+      g_in_doorbell = true;
       service_transport();
+      g_in_doorbell = false;
     }
     return 0;
   }
@@ -1052,15 +1086,25 @@ void csr_write(uint32_t pa, uint16_t v) {
 void poll() {
   static uint32_t live_ms = 0;
   uint32_t now = millis();
-  uint32_t period = g_host_online_wait ? 2000u : 10000u;
-  if (now - live_ms >= period) {
-    live_ms = now;
-    LOG("MSCP live state=%u xfer=%u rem=%u wait=%u irq=%u ticks=%u",
-        (unsigned)g_state, g_xfer.active ? 1u : 0u,
-        (unsigned)g_xfer.count,
-        g_host_online_wait ? 1u : 0u,
-        g_irq_latched ? 1u : 0u,
-        (unsigned)vax_clock::ticks());
+#if VVAX_DIAG_LEVEL == 0
+  if (g_host_online_wait)
+#endif
+  {
+    uint32_t period = g_host_online_wait ? 5000u :
+#if VVAX_DIAG_LEVEL >= 2
+                      10000u;
+#else
+                      30000u;
+#endif
+    if (now - live_ms >= period) {
+      live_ms = now;
+      LOG("MSCP live state=%u xfer=%u rem=%u wait=%u irq=%u ticks=%u",
+          (unsigned)g_state, g_xfer.active ? 1u : 0u,
+          (unsigned)g_xfer.count,
+          g_host_online_wait ? 1u : 0u,
+          g_irq_latched ? 1u : 0u,
+          (unsigned)vax_clock::ticks());
+    }
   }
   if (g_sa_pending) service_init();
   // Keep looking at rings in Run: NetBSD may post OWN after an early IP poll
@@ -1073,7 +1117,8 @@ void poll() {
 
 bool irq_pending() { return g_irq_latched; }
 bool busy() {
-  return g_irq_latched || g_cmd_valid || g_rsp_valid || g_xfer.active;
+  return g_irq_latched || g_irq_defer != 0 || g_cmd_valid || g_rsp_valid ||
+         g_xfer.active;
 }
 bool host_online_wait() { return g_host_online_wait; }
 uint16_t irq_vector() { return g_vec; }
@@ -1081,6 +1126,12 @@ uint16_t irq_vector() { return g_vec; }
 void irq_clear() {
   if (g_irq_latched) mscp_dump(DUMP_IRQ, "clear");
   g_irq_latched = false;
+}
+
+void instr_tick() {
+  if (g_irq_defer == 0) return;
+  if (--g_irq_defer) return;
+  latch_irq_now();
 }
 
 bool selftest() {

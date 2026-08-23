@@ -53,9 +53,10 @@ void     csr_write(uint32_t pa, uint16_t v);
 bool     csr_hit(uint32_t pa);
 
 void poll();                  // init service + ring transport
+void instr_tick();            // expire deferred response IRQ (lost-wakeup)
 
 bool irq_pending();
-bool busy();                  // cmd, xfer, rsp, or IRQ in flight
+bool busy();                  // cmd, xfer, rsp, IRQ, or deferred IRQ
 // ONLINE posted; host has not queued another command yet (ra_putonline tsleep).
 bool host_online_wait();
 uint16_t irq_vector();        // SCB byte offset; kernel uda probe uses 0x1FC
