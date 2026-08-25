@@ -29,6 +29,7 @@
 #include "vax_cpu.h"
 #include "vax_mmu.h"
 #include "vax_console.h"
+#include "vax_tu58.h"
 #include "vax_clock.h"
 #include "vax_mscp.h"
 #include "vax_boot.h"
@@ -328,6 +329,9 @@ void setup() {
   console_force_redraw();
   console_start_output_task();
   vax_console::begin();
+#if VAX_MODEL == VAX_MODEL_KA750
+  vax_tu58::begin();
+#endif
   if (cfg.clock_enabled) vax_clock::begin();
 
   wifi_connect();
@@ -384,6 +388,9 @@ void loop() {
     }
 #endif
     vax_console::poll();
+#if VAX_MODEL == VAX_MODEL_KA750
+    vax_tu58::poll();
+#endif
     if (cfg.clock_enabled) vax_clock::poll();
     vax_mscp::poll();
     if (vax_cpu::running()) {

@@ -1114,28 +1114,25 @@ void csr_write(uint32_t pa, uint16_t v) {
 }
 
 void poll() {
+#if VVAX_DIAG_LEVEL >= 1
   static uint32_t live_ms = 0;
   uint32_t now = millis();
-#if VVAX_DIAG_LEVEL == 0
-  if (g_host_online_wait)
-#endif
-  {
-    uint32_t period = g_host_online_wait ? 5000u :
+  uint32_t period = g_host_online_wait ? 5000u :
 #if VVAX_DIAG_LEVEL >= 2
-                      10000u;
+                    10000u;
 #else
-                      30000u;
+                    30000u;
 #endif
-    if (now - live_ms >= period) {
-      live_ms = now;
-      LOG("MSCP live state=%u xfer=%u rem=%u wait=%u irq=%u ticks=%u",
-          (unsigned)g_state, g_xfer.active ? 1u : 0u,
-          (unsigned)g_xfer.count,
-          g_host_online_wait ? 1u : 0u,
-          g_irq_latched ? 1u : 0u,
-          (unsigned)vax_clock::ticks());
-    }
+  if (now - live_ms >= period) {
+    live_ms = now;
+    LOG("MSCP live state=%u xfer=%u rem=%u wait=%u irq=%u ticks=%u",
+        (unsigned)g_state, g_xfer.active ? 1u : 0u,
+        (unsigned)g_xfer.count,
+        g_host_online_wait ? 1u : 0u,
+        g_irq_latched ? 1u : 0u,
+        (unsigned)vax_clock::ticks());
   }
+#endif
   if (g_sa_pending) service_init();
   // Keep looking at rings in Run: NetBSD may post OWN after an early IP poll
   // has already cleared g_poll, and /boot above 4 MiB needs a Q22 alias probe.

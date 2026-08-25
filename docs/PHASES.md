@@ -139,6 +139,97 @@ VA=01000000`** abort.
 Flash `vax-11750`; USB `vVax V0.7.3`. Expect `MCHK pa=01000000` and
 `MCHK pa=00FBA000` (no silent HALT). Still no VMB/console ROM.
 
+**V0.7.4:** VMS (`os=vms`) xxboot ROM-reads OK, then nexus scan MCHK at
+`0xF20000` (TR0) and `0xF80000`/`0xF80800`, UBA map[494], then
+`%BOOT-F-Unexpected Machine Check` / HALT `PC=000004C6`. TR0 is MS750 —
+must respond. `0xF32800` map alias made TR9 look like UBA1, so VMS used
+UBA1 Unibus mem at `0xF80000` outside a probe. C5: 750 MCHK frame
+`bcnt=0x28`. Flash `vax-11750`; USB `vVax V0.7.4`. Expect `MCTL mcsr2=…`
+and no MCHK at `0xF20000` / `0xF80000`. VMS still not the product target.
+
+**V0.7.5:** V0.7.4 found MCTL (`mcsr2=0x00011555 ram=8192000`) then HALT at
+`PC=000FFEC4` (zeros). Chip-size bits were 0, so VMS treated seven slots as
+256 KiB boards (~1.75 MiB) and transferred SYSBOOT to the top of 1 MiB.
+CS64 + complete 1 MiB boards only (`0x01011555` = 7 × 1 MiB). Do not claim
+8 MiB: Freenove RAM ends at `0x7D0000`. Flash `vVax V0.7.5`; expect
+`MCTL mcsr2=0x01011555` and no HALT at `0xFFEC4`.
+
+**V0.7.6:** V0.7.5 still HALT `PC=000FFEC4` zeros; `R1=000089D5 R2=000063EF
+R3=000FFE44` (copy src/len/dst) and no JMP log — transfer via `movab …,pc`
+before the copy. Host copies that range on VMS I-fetch of 0 in `0xF0000–
+0x100000`. Flash `vVax V0.7.6`; expect `boot: VMS relocate … 000089D5 ->
+000FFE44`.
+
+**V0.7.15:** C9 console TU58 (IPRs 28–31) always present, never a cartridge
+(RSP INIT→CONTINUE, commands END+NOC). `copy:` ash traces off (`VVAX_COPY_TRACE 0`).
+Stock GENERIC still plants `ctuattach` RET — `ka750_conf` calls it before
+`bufq_init`; hardware cannot skip that. Flash `vVax V0.7.15`.
+
+**V0.7.16:** Phase 6 xot isolation. NetBSD 10 `argstr` default is `STPUTC(c)`
+(no CTLESC on letters); gcc emits `cmpb $0x8C; blss`. SIMH `CC_CMP_B` sets
+N from signed src<dst and never V; vVax CMPB does src−dst and sets V.
+USB `xot: CMPB` / `xot: CTLESC store` on the first ash switch. Flash
+`vVax V0.7.16`.
+**Result:** isolated. Console is clean (`/etc/rc: xot: not found`). `'e'`/`'p'`/`'r'`
+of `export` each store CTLESC `0x81` at `PC=1C166` (`R11=0x80` quotes,
+`8(ap)=0x83`). CMPB `'e'` vs `$0x8C` at `1C114` is NZVC=`1011` (N=1 V=1);
+SIMH would have N=0 V=0. Next insn is BLSS then still `cmpb $0x80` at `1C11D`
+(so that BLSS did not skip the 0x80 arm). Later letters compare at `1C1B2`
+with **BGEQ** (`next=18`): vVax N=1 does not take it; SIMH N=0 would.
+Do not special-case `EXP_GLOB`. Next experiment is CMPB N = signed src<dst
+(V=0), CMPB-only first.
+
+**V0.7.17:** CMPB-only (not CMPW/CMPL): N = `(int8)src < (int8)dst`, V left 0,
+C still unsigned borrow. Tracer stays on. Flash `vVax V0.7.17`; expect
+`xot: CMPB` NZVC `0001` (`simhN=0`) at `1C114`. Pass = no CTLESC store /
+no `/etc/rc: xot`. Fail = still `1C166` with R11=0x80.
+**Result:** xot gone. CMPB `'e'`..`'t'` of `export` all at `PC=1C114`
+NZVC=`0001` `simhN=0` (packed walk, not `p+=2`). No `CTLESC store`. Next
+gate: `/etc/rc.subr: Number out of range: 2` then single-user
+(`Enter pathname of shell`). Leave CMPW/CMPL; do not special-case sh.
+
+**V0.7.18:** CMPW/CMPL match VARM CMP (`N ← src1 LSS src2; Z ← EQL; V ← 0;
+C ← LSSU`). CMPB already did. SUB still sets V. CASE/CMPV/CMPZV/INSQUE
+share `set_cmp_long`. Flash `vVax V0.7.18`; xot must stay gone. Next gate
+was `/etc/rc.subr: Number out of range: 2`.
+**Result:** xot still gone (packed `export` CMPB NZVC=`0001`). `/etc/rc.subr:
+Number out of range: 2` is gone. `init: /bin/sh on /etc/rc terminated
+abnormally` → single-user, no guest error line (likely signal; C7 D-float
+next if opcode dump shows `CVTLD`/`0x6E`).
+
+**V0.7.19:** VARM/SIMH NZVC remaining integer mismatches. CASEB/CASEW use
+width-correct CMP; MOVC5 `set_cmp_word`; MOV/CLR/MOVZ/PUSH/MOVA IIZP (C
+preserved; TST still `C←0`); CALLS/CALLG clear live NZVC; RET restores
+saved NZVC; DIVB/DIVW set V on div0 and minint/−1. Flash `vVax V0.7.19`.
+
+**V0.7.20:** C7 F/D execute (`vax_fpa` pack/unpack, short float literals,
+arith SCB `0x34` + type p1). ACCS reads 1 (`FPA present`). EMOD/POLY stay
+reserved-inst. Flash `vVax V0.7.20`. Pass = no `reserved inst 0x6E`, xot
+stays gone; `/etc/rc` may reach `login:` or a later reserved (0x54/0x55/
+0x74/0x75). Fail = `terminated abnormally` still, plus 0x6E.
+**Result:** binary `V0.7.20` (offset 20174). dmesg `cpu0 … FPA present`.
+xot stays gone (packed `export` CMPB NZVC=`0001`). No `VAX reserved inst`
+and **no** `fpa: op=` lines — `/etc/rc` aborted before any F/D opcode.
+Same `init: '/bin/sh' on '/etc/rc' terminated abnormally` as V0.7.18.
+C7 execute is on the board; this abort is not `CVTLD`/`0x6E`. Next is the
+signal that kills `sh` (still no guest error line).
+
+**V0.7.21:** Console RX. SIMH keeps `tti_int` until RXDB is read; we acked
+the 0→1 latch on vector take, so a skipped take (IPL≥20) left DONE set,
+the FIFO paused, and both Telnet and USB looked dead at the single-user
+prompt. Re-assert RX while `{IE AND DONE}`; harvest every 256 insns in
+`step()`. TX stays edge (V0.6.11). Flash `vVax V0.7.21`. Expect `cons: rx`
+when you type; RETURN at `Enter pathname of shell` should get `/bin/sh`.
+
+**Result:** Telnet keys reached init; `/bin/sh` started (slow, no signal
+abort). Single-user shell works.
+
+**V0.7.22:** Take hot-path diagnostics out of `exec_one` / `mem_r8`. DIAG 0
+drops kprobe every insn, ACV-storm USB dumps, JMP-user / high-xfer logs,
+`mem_r8` copy-watch branches, and MSCP live lines. 30s `hb: ips=` stays.
+Repair-user PSL/SP is unchanged (not a log). Flash when the live shell can
+be dropped; compare `ips=` to V0.7.21 (~5–15k userland).
+
 ## Phase 7 — Host UX parity (vpdp1170)
 
 Mirror the common Freenove emulator host stack from **vpdp1170** (same `host_lib` family). Guest console Telnet/FTP/WiFi/INI already work; this phase fills the operator UX gaps.

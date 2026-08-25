@@ -1,4 +1,5 @@
 #include "vax_console.h"
+#include "config.h"
 #include "console.h"
 #include "telnet.h"
 #include "fifo.h"
@@ -90,6 +91,18 @@ static void harvest_keys() {
       bool was = slu_ready_ie(rxcs);
       rxcs |= CSR_DONE;
       slu_eval_edge(rxcs, was, &rx_irq_latched);
+#if VVAX_DIAG_LEVEL >= 1
+      static uint8_t logs = 8;
+      if (logs) {
+        logs--;
+        LOG("cons: rx 0x%02X '%c' ie=%u latch=%u q=%u",
+            (unsigned)b,
+            (b >= 0x20u && b < 0x7fu) ? (char)b : '.',
+            (rxcs & CSR_IE) ? 1u : 0u,
+            rx_irq_latched ? 1u : 0u,
+            (unsigned)rxq.count());
+      }
+#endif
     }
   }
 }
@@ -146,9 +159,14 @@ void txdb_wr(uint32_t v) {
     tx_irq_latched = true;
 }
 
-bool irq_rx() { return rx_irq_latched; }
+bool irq_rx() { return rx_irq_latched || slu_ready_ie(rxcs); }
 bool irq_tx() { return tx_irq_latched; }
-void irq_rx_ack() { rx_irq_latched = false; }
+void irq_rx_ack() {
+  // SIMH tti_int stays up until RXDB is read (level). Ack-on-delivery plus
+  // edge-only made DONE-stuck silent: IPL>=20 skipped the take, latch was
+  // cleared, and harvest would not load another char while DONE stayed 1.
+  rx_irq_latched = slu_ready_ie(rxcs);
+}
 void irq_tx_ack() { tx_irq_latched = false; }
 
 bool selftest() {

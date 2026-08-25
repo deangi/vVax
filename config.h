@@ -4,7 +4,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.7.3"
+#define APP_VERSION     "V0.7.22"
 // Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
 // rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)
@@ -60,7 +60,8 @@
 #define vax_ram_mb_ok(mb)   ((mb) == 2 || (mb) == 4 || (mb) == 6 || (mb) == 8)
 
 // ---- Guest diagnostics (USB serial [vVax] lines) ----
-// 0 = quiet (default): milestones, errors, suspicious ACV (kernel PSL at user PC)
+// 0 = quiet (default): boot milestones, errors, 30s ips heartbeat. No
+//     per-instruction USB, ACV storms, kprobe, JMP-user, or mem_r8 watches.
 // 1 = boot debug: kprobe, limited MSCP DMA, repair/REI logs
 // 2 = verbose: all ACV, DMA/xfer/load, frequent heartbeats
 #define VVAX_DIAG_LEVEL 0
@@ -72,9 +73,21 @@
 // Guest instructions per loop() when running. Was 1000 + delay(1).
 #define VVAX_STEP_BATCH         10000
 
+// UV2 Phase 6 ash `xot` traces (`copy:` USB lines). Off so guest console
+// stays readable; set to 1 only while chasing argstr/CTLESC.
+#ifndef VVAX_COPY_TRACE
+#define VVAX_COPY_TRACE 0
+#endif
+
+// Phase 6 xot isolation: log ash argstr CMPB $0x8C / CTLESC store NZVC.
+// Compare with SIMH CC_CMP_B (N = signed src<dst, V not set).
+#ifndef VVAX_XOT_ISO
+#define VVAX_XOT_ISO 0
+#endif
+
 // Compile-time guest CPU. One machine per firmware image — not a runtime switch.
 // main / KA630 firmware stays MicroVAX II. This branch builds KA750 (11/750).
-// V0.7.3 experimental 750: empty CMI/nexus reads MCHK (I-fetch was HALT);
+// V0.7.6 experimental 750: VMS 1 MiB-linked SYSBOOT relocate if I-fetch is 0.
 // [system] os= selects NetBSD vs VMS host boot path (not a SID lie).
 // Not GENERIC cmi0/uda0. Product target in TARGET.md remains MicroVAX II.
 #define VAX_MODEL_KA630  630
