@@ -258,6 +258,11 @@ Prefix bisect of `rc.subr` via `sed … | . /dev/stdin` was **not** run
 (`1,148` / `1,209` / `1,281` / `1,589` / `1,917`). That is the next guest
 step; `/tmp` is not required.
 
+**C10** (plan only, [`VAX11750.md`](VAX11750.md)): conversational VMS on
+this 750 branch via `[system] os=vms` + user-supplied pack; xxboot only
+(no VMB / no `0xF20400` ROM). Last VMS firmware work is V0.7.6. Independent
+of the NetBSD `rc.subr` bisect; do not swap disks unless you mean to leave C8.
+
 Not C7: still no `fpa: op=` / `CVTLD` on this path. Do not re-open CMPB,
 BLSS=N^V, or xot. Do not hold COM18 with `reset_monitor.py` while Telnet
 is the console.

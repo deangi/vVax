@@ -88,6 +88,7 @@
 // Compile-time guest CPU. One machine per firmware image — not a runtime switch.
 // main / KA630 firmware stays MicroVAX II. This branch builds KA750 (11/750).
 // V0.7.6 experimental 750: VMS 1 MiB-linked SYSBOOT relocate if I-fetch is 0.
+// C10 (VAX11750.md): conversational VMS via [system] os=vms; still xxboot, no VMB.
 // [system] os= selects NetBSD vs VMS host boot path (not a SID lie).
 // Not GENERIC cmi0/uda0. Product target in TARGET.md remains MicroVAX II.
 #define VAX_MODEL_KA630  630
