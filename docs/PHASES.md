@@ -263,6 +263,13 @@ this 750 branch via `[system] os=vms` + user-supplied pack; xxboot only
 (no VMB / no `0xF20400` ROM). Last VMS firmware work is V0.7.6. Independent
 of the NetBSD `rc.subr` bisect; do not swap disks unless you mean to leave C8.
 
+**V0.7.23:** C10 after the V0.7.6 SYSBOOT memcpy plant: set MOVC3 leftovers
+(`R0=0`, `R1=src+n`, `R2=0`, `R3=dst+n`) so SYSBOOT does not see the
+pre-copy source/len. Bit-field `vpos`/`vsize`/`vspan` take SCB reserved-
+operand (`0x18`) instead of host `fault 3`. Flash `vVax V0.7.23`; expect
+`boot: VMS relocate … R1=0000EDC4 R3=00106233` (not `R1=000089D3`) and no
+`VAX fault 3 (vpos)`. Next is `SYSBOOT>` or a later ISA/MCHK line.
+
 Not C7: still no `fpa: op=` / `CVTLD` on this path. Do not re-open CMPB,
 BLSS=N^V, or xot. Do not hold COM18 with `reset_monitor.py` while Telnet
 is the console.

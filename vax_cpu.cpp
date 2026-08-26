@@ -1121,12 +1121,12 @@ static VField decode_vfield_base() {
 static uint32_t vfield_extract(uint32_t pos, uint32_t size, const VField& base) {
   if (size == 0) return 0;
   if (size > 32) {
-    note_fault(3, "vsize");
+    raise_exception(0x18u);  // SCB_RESOP
     return 0;
   }
   if (!base.is_mem) {
     if (pos > 31) {
-      note_fault(3, "vpos");
+      raise_exception(0x18u);  // SCB_RESOP — do not host-halt (C10 vpos)
       return 0;
     }
     uint32_t wd = g_st.r[base.rn];
@@ -1150,17 +1150,17 @@ static uint32_t vfield_extract(uint32_t pos, uint32_t size, const VField& base) 
 static void vfield_insert(uint32_t ins, uint32_t pos, uint32_t size, const VField& base) {
   if (size == 0) return;
   if (size > 32) {
-    note_fault(3, "vsize");
+    raise_exception(0x18u);  // SCB_RESOP
     return;
   }
   if (!base.is_mem) {
     if (pos > 31) {
-      note_fault(3, "vpos");
+      raise_exception(0x18u);  // SCB_RESOP
       return;
     }
     if (pos + size > 32) {
       if (base.rn >= 14) {
-        note_fault(3, "vspan");
+        raise_exception(0x18u);  // SCB_RESOP
         return;
       }
       uint32_t mask = bitfield_mask(pos + size - 32);
@@ -2963,8 +2963,18 @@ static void vms_try_high_relocate(uint32_t pc) {
   if (pc < dst || pc >= dst + n) return;
   if (!pa_ok(src, n) || !pa_ok(dst, n)) return;
   memcpy(g_ram + dst, g_ram + src, n);
-  LOG("boot: VMS relocate %u bytes %08X -> %08X (I-fetch 0 at %08X)",
-      (unsigned)n, (unsigned)src, (unsigned)dst, (unsigned)pc);
+  // The skipped VAX copy is MOVC3-class: leftover R0=0, R1=src+n, R2=0,
+  // R3=dst+n (V0.7.22 left R1/R2 as the pre-copy src/len; EXTZV then used
+  // R1 as a bit position and host-halted vpos).
+  g_st.r[0] = 0;
+  g_st.r[1] = src + n;
+  g_st.r[2] = 0;
+  g_st.r[3] = dst + n;
+  g_st.r[4] = 0;
+  g_st.r[5] = 0;
+  LOG("boot: VMS relocate %u bytes %08X -> %08X (I-fetch 0 at %08X) R1=%08X R3=%08X",
+      (unsigned)n, (unsigned)src, (unsigned)dst, (unsigned)pc,
+      (unsigned)g_st.r[1], (unsigned)g_st.r[3]);
 }
 
 // C7 F/D via host IEEE double (vax_fpa pack/unpack). EMOD/POLY stay reserved.
@@ -4945,7 +4955,7 @@ static void exec_one() {
       Opnd dst = decode_opnd(ACC_W, 4);
       if (!pos.ok || !size.ok || !base.ok || !dst.ok) return;
       uint32_t field = vfield_extract(pos.value, size.value & 0xFF, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       uint32_t off = find_first_set(field, size.value & 0xFF);
       store_opnd(dst, pos.value + off, 4);
       g_st.psl &= ~(PSL_N | PSL_V | PSL_C);
@@ -4961,7 +4971,7 @@ static void exec_one() {
       if (!pos.ok || !size.ok || !base.ok || !dst.ok) return;
       uint32_t sz = size.value & 0xFF;
       uint32_t field = vfield_extract(pos.value, sz, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       field ^= bitfield_mask(sz);
       uint32_t off = find_first_set(field, sz);
       store_opnd(dst, pos.value + off, 4);
@@ -4978,7 +4988,7 @@ static void exec_one() {
       if (!pos.ok || !size.ok || !base.ok || !dst.ok) return;
       uint32_t sz = size.value & 0xFF;
       uint32_t r = vfield_extract(pos.value, sz, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       if (sz && (r & (1u << (sz - 1))))
         r |= ~bitfield_mask(sz);
       store_opnd(dst, r, 4);
@@ -4994,7 +5004,7 @@ static void exec_one() {
       Opnd dst = decode_opnd(ACC_W, 4);
       if (!pos.ok || !size.ok || !base.ok || !dst.ok) return;
       uint32_t r = vfield_extract(pos.value, size.value & 0xFF, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       store_opnd(dst, r, 4);
       set_nz_long(r);
       g_st.psl &= ~PSL_V;
@@ -5899,7 +5909,7 @@ static void exec_one() {
       if (!pos.ok || !size.ok || !base.ok || !src2.ok) return;
       uint32_t sz = size.value & 0xFF;
       uint32_t r = vfield_extract(pos.value, sz, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       if (sz && (r & (1u << (sz - 1)))) r |= ~bitfield_mask(sz);
       set_cmp_long(r, src2.value);
       return;
@@ -5911,7 +5921,7 @@ static void exec_one() {
       Opnd src2 = decode_opnd(ACC_R, 4);
       if (!pos.ok || !size.ok || !base.ok || !src2.ok) return;
       uint32_t r = vfield_extract(pos.value, size.value & 0xFF, base);
-      if (g_st.fault) return;
+      if (g_st.fault || g_mmgt_abort) return;
       set_cmp_long(r, src2.value);
       return;
     }
