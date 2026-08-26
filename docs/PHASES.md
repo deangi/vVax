@@ -229,6 +229,38 @@ drops kprobe every insn, ACV-storm USB dumps, JMP-user / high-xfer logs,
 `mem_r8` copy-watch branches, and MSCP live lines. 30s `hb: ips=` stays.
 Repair-user PSL/SP is unchanged (not a log). Flash when the live shell can
 be dropped; compare `ips=` to V0.7.21 (~5–15k userland).
+**Result:** flashed. Userland `hb: ips=` ~22k–37k (was ~5–15k). Still far
+from Phase 8 (≥300 KIPS). Single-user `#` is usable over Telnet.
+
+**Checkpoint (25 Aug 2026, still V0.7.22):** `/etc/rc` abort is **ash
+SIGSEGV** while sourcing `/etc/rc.subr`, not a C7 opcode and not `-xv`.
+`init` prints `single user shell terminated (b)` (`wait` status `0xb` =
+signal 11). Heartbeats around the crash: ash P0 (`PC=000252A4`) then P1
+(`PC=7F61A483`, ld.so/libc).
+
+Guest splits (same `#`, no firmware change):
+
+- Typed functions live: `f() { echo hi; }`, `g() { x=$(echo hi); }`,
+  `case "${nl}$( echo foo )${nl}"`, nested `$( … | while …; case "$(…)" )`.
+- `. /dev/stdin` of that tiny function lives. `. /etc/rc.subr` SIGSEGVs
+  with no `set -xv`. Nested `/bin/sh` is a separate fail: `Cannot execute
+  ELF binary bin/sh` (ENOEXEC / `setinputfile`).
+- `/sbin/mount` (dynamic, no args) SIGSEGVs. `/rescue/mount` lists
+  `root_device on / type ffs (read-only, local)` — kernel `getvfsstat` is
+  fine. Root stayed ro: `/rescue/mount -u -w /` hits `/etc/fstab` “Missing
+  fields” then `mount: /:` (empty `strsignal`; generic `mount` forks
+  `mount_ffs`). `/rescue/mount -t ffs -u -w /dev/ra0a /` same empty error.
+  Do not treat remount as the next ISA hunt until `/rescue/mount_ffs -o
+  update,rw /dev/ra0a /` is tried.
+- `PATH` at this prompt lacks `/sbin` (`mount: not found`).
+
+Prefix bisect of `rc.subr` via `sed … | . /dev/stdin` was **not** run
+(`1,148` / `1,209` / `1,281` / `1,589` / `1,917`). That is the next guest
+step; `/tmp` is not required.
+
+Not C7: still no `fpa: op=` / `CVTLD` on this path. Do not re-open CMPB,
+BLSS=N^V, or xot. Do not hold COM18 with `reset_monitor.py` while Telnet
+is the console.
 
 ## Phase 7 — Host UX parity (vpdp1170)
 
