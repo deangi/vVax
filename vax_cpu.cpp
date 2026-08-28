@@ -6148,6 +6148,7 @@ void request_halt() {
 uint8_t* ram() { return g_ram; }
 size_t   ram_bytes() { return g_ram_bytes; }
 State&   state() { return g_st; }
+uint32_t instr_count() { return g_instr_count; }
 
 bool selftest() {
   // Assembled at 0x1000 — math check then print "vVax OK\r\n" via console MMIO.
@@ -6232,6 +6233,12 @@ void cold_boot() {
   if (!mscp_ok) LOGE("VAX cold boot: MSCP selftest failed");
   // selftest briefly enables ICCS IE; clear before xxboot (/boot races SCBB vs IRQ).
   vax_clock::reset();
+}
+
+void resume() {
+  g_st.halt = false;
+  g_st.fault = 0;
+  g_running = true;
 }
 
 void run() {

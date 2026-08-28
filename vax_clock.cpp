@@ -1,9 +1,11 @@
 #include "vax_clock.h"
 #include "config.h"
 #include "platform.h"
+#include "host_lib/time/host_time.h"
 
 #include <Arduino.h>
 #include <string.h>
+#include <time.h>
 
 namespace vax_clock {
 
@@ -112,6 +114,41 @@ void begin() {
   g_icr = 0;
   toy_set_default();
   toy_sync_todr();
+  apply_host_utc();
+}
+
+void apply_host_utc() {
+  if (!host_time_synced()) return;
+  if (g_todr_set) return;
+  time_t now = time(nullptr);
+  struct tm tm {};
+  gmtime_r(&now, &tm);
+  int y1970 = (int)tm.tm_year - 70;
+  if (y1970 < 0) y1970 = 0;
+  if (y1970 > 255) y1970 = 255;
+  g_toy[0]  = (uint16_t)tm.tm_sec;
+  g_toy[2]  = (uint16_t)tm.tm_min;
+  g_toy[4]  = (uint16_t)tm.tm_hour;
+  g_toy[6]  = (uint16_t)(tm.tm_wday + 1);  // Sun=1
+  g_toy[7]  = (uint16_t)tm.tm_mday;
+  g_toy[8]  = (uint16_t)(tm.tm_mon + 1);
+  g_toy[9]  = (uint16_t)y1970;
+  g_toy[10] = 0;
+  g_toy[11] = 0x06;
+  g_toy[12] = 0;
+  g_toy[13] = 0x80;  // VRT valid
+  g_toy_cs = 0;
+  const uint32_t sec =
+      (uint32_t)tm.tm_hour * 3600u + (uint32_t)tm.tm_min * 60u +
+      (uint32_t)tm.tm_sec;
+  g_todr = TODRBASE + sec * 100u;
+  static bool logged = false;
+  if (!logged) {
+    logged = true;
+    char buf[32];
+    if (host_time_format_utc(buf, sizeof(buf)))
+      LOG("clock: TODR/TOY from NTP %s", buf);
+  }
 }
 
 void reset() {
@@ -148,6 +185,8 @@ void poll() {
   uint32_t steps = dt / 10;
   g_last_ms += steps * 10;
   apply_ticks(steps);
+  if (!g_todr_set && (g_ticks % 100u == 0))
+    apply_host_utc();
 }
 
 void force_tick() {
@@ -271,7 +310,9 @@ bool selftest() {
   }
   todr_wr(t0);
 #if VAX_MODEL == VAX_MODEL_KA630
-  LOG("clock selftest: PASS (TOY 1-JAN-2026 TODR=%08X)", (unsigned)t0);
+  LOG("clock selftest: PASS (TOY y=%u m=%u d=%u TODR=%08X)",
+      (unsigned)g_toy[9], (unsigned)g_toy[8], (unsigned)g_toy[7],
+      (unsigned)t0);
 #else
   LOG("clock selftest: PASS (TODR=%08X)", (unsigned)t0);
 #endif

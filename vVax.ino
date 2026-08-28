@@ -47,9 +47,60 @@ static bool sd_ok = false;
 static bool guest_ready = false;
 static volatile bool g_guest_restart_req = false;
 static SemaphoreHandle_t g_ui_mutex = nullptr;
+static uint8_t g_bright = 90;  // percent, 10..100
 
-enum BootState { BOOT_RUNNING, BOOT_OK, BOOT_FAIL };
-static BootState boot_state = BOOT_RUNNING;
+static uint8_t brightness_pwm() {
+  uint16_t pwm = (uint16_t)g_bright * 255u / 100u;
+  if (pwm > 255) pwm = 255;
+  return (uint8_t)pwm;
+}
+
+static void apply_backlight() {
+#ifdef TFT_BL
+  const uint8_t pwm = brightness_pwm();
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+  analogWrite(TFT_BL, pwm);
+#else
+  static bool ledc_ok = false;
+  if (!ledc_ok) {
+    ledcSetup(2, 5000, 8);
+    ledcAttachPin(TFT_BL, 2);
+    ledc_ok = true;
+  }
+  ledcWrite(2, pwm);
+#endif
+#else
+  (void)g_bright;
+#endif
+}
+
+uint8_t host_brightness() { return g_bright; }
+void host_set_brightness(uint8_t v) {
+  if (v < 10) v = 10;
+  if (v > 100) v = 100;
+  g_bright = v;
+  apply_backlight();
+}
+
+void host_request_guest_restart() { g_guest_restart_req = true; }
+void host_request_guest_halt() { vax_cpu::request_halt(); }
+void host_request_guest_continue() { vax_cpu::resume(); }
+
+const char* host_guest_status() {
+  if (!guest_ready) return "not ready";
+  if (ui_menu_open()) return "paused";
+  if (vax_cpu::running()) return "running";
+  if (vax_cpu::state().fault) return "fault";
+  if (vax_cpu::state().halt) return "halted";
+  return "stopped";
+}
+
+static void log_to_telnet(const char* line) {
+  if (!line || telnet_shell_active() || !telnet_connected()) return;
+  while (*line) telnet_diag_write((uint8_t)*line++);
+  telnet_diag_write('\r');
+  telnet_diag_write('\n');
+}
 
 static void led(uint8_t r, uint8_t g, uint8_t b) {
   strip.setLedColorData(0, r, g, b);
@@ -82,12 +133,8 @@ enum {
   ROW_PSRAM = 0, ROW_SD, ROW_CFG, ROW_MSCP, ROW_WIFI, ROW_IP, ROW_CPU
 };
 
-void host_request_guest_restart() { g_guest_restart_req = true; }
-
-const char* host_guest_status() {
-  if (!guest_ready) return "not ready";
-  return vax_cpu::running() ? "running" : "halted (stub)";
-}
+enum BootState { BOOT_RUNNING, BOOT_OK, BOOT_FAIL };
+static BootState boot_state = BOOT_RUNNING;
 
 static void on_wifi_up() {
   if (!host_time_synced())
@@ -271,7 +318,11 @@ static void guest_cold_start() {
 
 static void render_task(void*) {
   for (;;) {
-    console_render(tft);
+    if (ui_take_tft()) {
+      if (!ui_menu_open())
+        console_render(tft);
+      ui_give_tft();
+    }
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
@@ -296,6 +347,7 @@ void setup() {
 
   tft.init();
   tft.setRotation(1);
+  host_set_brightness(g_bright);
   tft_banner();
 
   size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
@@ -340,8 +392,11 @@ void setup() {
     while (!host_time_synced() && millis() - t0 < NTP_BOOT_WAIT_MS)
       delay(100);
   }
+  if (cfg.clock_enabled)
+    vax_clock::apply_host_utc();
 
   telnet_begin((uint16_t)cfg.telnet_port, cfg.telnet_enabled);
+  g_host_log_aux = log_to_telnet;
   ftp_begin((uint16_t)cfg.ftp_port, cfg.ftp_enabled,
             cfg.ftp_user.c_str(), cfg.ftp_password.c_str());
   start_net_task();
@@ -371,7 +426,16 @@ void loop() {
 
   if (g_guest_restart_req) {
     g_guest_restart_req = false;
-    if (guest_ready) guest_cold_start();
+    if (guest_ready) {
+      console_init();
+      ui_clear_screen();
+      guest_cold_start();
+    }
+  }
+
+  if (ui_menu_open()) {
+    delay(1);
+    return;
   }
 
   if (guest_ready) {

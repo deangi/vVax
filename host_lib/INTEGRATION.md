@@ -35,7 +35,7 @@ Default personality is **VT100** (same as vpdp1170). Do **not** switch to ADM-3A
 ## Telnet
 
 Sketch `telnet.cpp` wraps `TelnetPipe` and routes `ESC` `>` into `telnet_shell.*`
-(status / reset / help for now).
+(`host_lib/shell_*`: FS, drives, set, reset, VAX halt/cont/regs).
 
 ## Network / time / NAT
 

@@ -13,6 +13,8 @@ void begin();
 void reset();
 void poll();                 // 100 Hz tick from host millis
 void force_tick();           // one extra 10 ms tick (idle-warp during boot)
+// Copy SNTP UTC into TOY + TODR when the guest has not yet mtpr'd TODR.
+void apply_host_utc();
 
 // KA630 TOY clock chip @ 0x200B8000 (NetBSD chip_gettime). No-op on KA750.
 bool     toy_hit(uint32_t pa);

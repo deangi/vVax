@@ -4,7 +4,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.7.23"
+#define APP_VERSION     "V0.7.27"
 // Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
 // rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)
@@ -29,6 +29,9 @@
 #define TEXT_ROWS       25
 #define CELL_W          4
 #define CELL_H          8
+// Console is 80×25 × 4×8 = 320×200. Remaining 40 px is the Phase 7 status band.
+#define VPDP_STATUS_BAND_H  40
+#define VPDP_STATUS_BAND_Y  (TEXT_ROWS * CELL_H)
 
 // ---- Capacitive touch FT6336U (I2C) ----
 #define TOUCH_SDA       16

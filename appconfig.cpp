@@ -515,8 +515,28 @@ bool config_copy_file(const char* src, const char* dst) {
 }
 
 int config_list_variants(const char* prefix, char names[][44], int max) {
-  (void)prefix; (void)names; (void)max;
-  return 0;  // variant picker UI later
+  if (!prefix || !names || max <= 0) return 0;
+  HostSdGuard guard;
+  File dir = SD_MMC.open("/");
+  if (!dir || !dir.isDirectory()) return 0;
+  int n = 0;
+  const size_t plen = strlen(prefix);
+  File f;
+  while (n < max && (f = dir.openNextFile())) {
+    if (!f.isDirectory()) {
+      const char* nm = f.name();
+      const char* base = strrchr(nm, '/');
+      base = base ? base + 1 : nm;
+      if (!strncmp(base, prefix, plen) && strstr(base, ".ini")) {
+        strncpy(names[n], base, 43);
+        names[n][43] = 0;
+        n++;
+      }
+    }
+    f.close();
+  }
+  dir.close();
+  return n;
 }
 
 void config_print(const AppConfig& cfg) {

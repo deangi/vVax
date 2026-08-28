@@ -155,6 +155,11 @@ void telnet_reset_guest_io() {
 
 void telnet_write(uint8_t c) { g_pipe.write(c); }
 
+void telnet_diag_write(uint8_t c) {
+  ensure_pipe();
+  g_pipe.diag_write(c);
+}
+
 bool        telnet_connected() { return g_pipe.connected(); }
 bool        telnet_listening() { return g_pipe.listening(); }
 const char* telnet_client_ip() { return g_pipe.client_ip(); }

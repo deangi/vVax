@@ -128,6 +128,12 @@ static uint8_t g_cmd_pkt[PACKET_BYTES];
 static uint8_t g_rsp_pkt[PACKET_BYTES];
 static uint16_t g_rsp_len = 0;
 static Xfer g_xfer;
+static uint32_t g_access_ms[UNIT_COUNT];
+static constexpr uint32_t kAccessHoldMs = 500u;
+
+static void note_access(uint8_t u) {
+  if (u < UNIT_COUNT) g_access_ms[u] = millis();
+}
 
 static uint32_t g_dump_flags = 0;
 static uint32_t g_dump_left  = 0;
@@ -194,6 +200,7 @@ void begin() {
   for (int i = 0; i < UNIT_COUNT; i++) {
     if (g_drv[i].open) g_drv[i].file.close();
     g_drv[i] = Drive{};
+    g_access_ms[i] = 0;
   }
   // Keep phys ops if CPU already registered them (remount / restart).
   hard_init_controller();
@@ -241,14 +248,17 @@ void unmount(Unit u) {
     g_drv[u].file.close();
   }
   g_drv[u] = Drive{};
+  g_access_ms[u] = 0;
 }
 
 bool mounted(Unit u) { return u < UNIT_COUNT && g_drv[u].open; }
+bool readonly(Unit u) { return mounted(u) && g_drv[u].readonly; }
 const char* path(Unit u) { return mounted(u) ? g_drv[u].path.c_str() : ""; }
 uint64_t size_bytes(Unit u) { return mounted(u) ? g_drv[u].bytes : 0; }
 
 bool read_blocks(Unit u, uint32_t lba, void* buf, size_t nblocks) {
   if (!mounted(u) || !buf || nblocks == 0) return false;
+  note_access((uint8_t)u);
   const uint64_t nb = g_drv[u].bytes / BLOCK;
   if ((uint64_t)lba >= nb || (uint64_t)nblocks > nb - lba) return false;
   HostSdGuard guard;
@@ -262,6 +272,7 @@ bool read_blocks(Unit u, uint32_t lba, void* buf, size_t nblocks) {
 
 bool write_blocks(Unit u, uint32_t lba, const void* buf, size_t nblocks) {
   if (!mounted(u) || !buf || nblocks == 0) return false;
+  note_access((uint8_t)u);
   if (g_drv[u].readonly) return false;
   const uint64_t nb = g_drv[u].bytes / BLOCK;
   if ((uint64_t)lba >= nb || (uint64_t)nblocks > nb - lba) return false;
@@ -779,6 +790,7 @@ static bool start_transfer(bool write) {
   g_xfer.address = address;
   g_xfer.offset = lbn * (uint32_t)BLOCK;
   g_xfer.status = 0;
+  note_access((uint8_t)unit);
   // Always log early DMA so we can see whether loadfile uses KERNBASE
   // (0x80000000) or a bounce/Q22-mapped low address — Arduino "already in
   // flash" skips made the one-shot S0 line alone unreliable.
@@ -801,6 +813,7 @@ static bool start_transfer(bool write) {
 
 static void continue_transfer() {
   if (!g_xfer.active) return;
+  note_access(g_xfer.unit);
   // Up to 8 KiB per service_transport call — still bounded, much faster than
   // one 512 B chunk per outer poll when /boot loadfile reads large counts.
   static constexpr uint32_t kXferBurst = 8192u;
@@ -1146,6 +1159,12 @@ bool irq_pending() { return g_irq_latched; }
 bool busy() {
   return g_irq_latched || g_irq_defer != 0 || g_cmd_valid || g_rsp_valid ||
          g_xfer.active;
+}
+bool unit_busy(Unit u) {
+  if (u >= UNIT_COUNT || !g_drv[u].open) return false;
+  if (g_xfer.active && g_xfer.unit == (uint8_t)u) return true;
+  uint32_t t = g_access_ms[u];
+  return t != 0 && (millis() - t) < kAccessHoldMs;
 }
 bool host_online_wait() { return g_host_online_wait; }
 uint16_t irq_vector() { return g_vec; }

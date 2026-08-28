@@ -274,20 +274,29 @@ Not C7: still no `fpa: op=` / `CVTLD` on this path. Do not re-open CMPB,
 BLSS=N^V, or xot. Do not hold COM18 with `reset_monitor.py` while Telnet
 is the console.
 
+**V0.7.24:** Phase 7 host UX. Persistent TFT status band (title, run/halt,
+IP, TEL/FTP/DSK pills, KIPS). Double-tap or tap the band for settings
+(drives, INI variants, brightness, guest restart); guest paused while
+open. Telnet `Esc >` registers `host_lib/shell_*`: `ls`/`cd`/`pwd`,
+`drives`/`mount`/`dismount`, `set`, `reset`/`reboot`, `halt`/`cont`/`regs`.
+USB LOG also copies to Telnet diag when the guest console is attached.
+SNTP UTC → TODR/TOY when the guest has not `mtpr`'d TODR. Flash
+`vVax V0.7.24`.
+
 ## Phase 7 — Host UX parity (vpdp1170)
 
 Mirror the common Freenove emulator host stack from **vpdp1170** (same `host_lib` family). Guest console Telnet/FTP/WiFi/INI already work; this phase fills the operator UX gaps.
 
 | Feature | Goal | vpdp1170 reference | vVax today |
 |---------|------|--------------------|------------|
-| **Status line** | Persistent TFT band: title, IP, TEL/FTP pills, MSCP activity, KIPS/halt | `draw_status_bar`, `VPDP_STATUS_BAND_H` | Boot `tft_status` rows only |
-| **Touch GUI** | Double-tap settings: drives, WiFi/config pickers, brightness, restart/reset; pause guest while open | `ui.cpp`, `touch.cpp` | `ui.cpp` stub (“later host polish”) |
-| **Telnet shell** | `Esc` then `>>` host shell: FS, `drives`/`mount`/`dismount`, `set`, `reboot`/`reset`, VAX `halt`/`continue`/`regs`; `exit` → guest | `telnet_shell` + `host_lib/shell_*` | Minimal: `help`/`status`/`reset`/`exit`; shell libs not registered |
+| **Status line** | Persistent TFT band: title, IP, TEL/FTP pills, MSCP activity, KIPS/halt | `draw_status_bar`, `VPDP_STATUS_BAND_H` | **V0.7.24** band at y=200 |
+| **Touch GUI** | Double-tap settings: drives, WiFi/config pickers, brightness, restart/reset; pause guest while open | `ui.cpp`, `touch.cpp` | **V0.7.24** double-tap or tap band |
+| **Telnet shell** | `Esc` then `>>` host shell: FS, `drives`/`mount`/`dismount`, `set`, `reboot`/`reset`, VAX `halt`/`continue`/`regs`; `exit` → guest | `telnet_shell` + `host_lib/shell_*` | **V0.7.24** `host_lib/shell_*` registered |
 | **Guest Telnet** | Keep port 23 guest console (TFT+USB+Telnet) | `telnet_pipe` | Done |
 | **FTP** | Keep SD FTP + storage guard vs mounted MSCP | `ftp` + `storage_guard` | Done |
-| **boot_script** | Optional expect/reply after reboot (vpdp `boot_script`) | `host_lib/boot/boot_script.*` | `boot_input` only |
-| **host_diag** | Diag stream to USB + Telnet (not only Serial) | `host_diag.*` | USB Serial dumps only |
-| **TOY / TODR / NTP** | KA630 chip @ `0x200B8000` with VRT valid; SNTP → guest wall clock; GUI/shell set/show time; optional NV persist | `host_time`, `vax_clock` | Interim fixed **1-JAN-2026 00:00:00**; TODR IPR + chip; no NTP push yet |
+| **boot_script** | Optional expect/reply after reboot (vpdp `boot_script`) | `host_lib/boot/boot_script.*` | Still `boot_input` only |
+| **host_diag** | Diag stream to USB + Telnet (not only Serial) | `host_diag.*` | **V0.7.24** LOG → Telnet diag FIFO |
+| **TOY / TODR / NTP** | KA630 chip @ `0x200B8000` with VRT valid; SNTP → guest wall clock; GUI/shell set/show time; optional NV persist | `host_time`, `vax_clock` | **V0.7.24** SNTP → TODR/TOY; no NV persist |
 
 Implementation notes:
 

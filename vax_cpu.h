@@ -40,6 +40,7 @@ bool     init(size_t ram_bytes);
 void     reset();
 void     cold_boot();
 void     run();              // clear halt and execute from current PC
+void     resume();           // continue after host halt (do not reset counters)
 void     step(unsigned n);
 bool     running();
 void     request_halt();
@@ -53,5 +54,6 @@ bool     selftest();
 uint8_t* ram();
 size_t   ram_bytes();
 State&   state();
+uint32_t instr_count();  // monotonic; status-bar KIPS uses deltas
 
 }  // namespace vax_cpu

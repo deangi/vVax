@@ -48,6 +48,7 @@ void reset();                 // soft: keep mounts; hard init via IP write
 bool mount(Unit u, const char* path);
 void unmount(Unit u);
 bool mounted(Unit u);
+bool readonly(Unit u);
 const char* path(Unit u);
 uint64_t size_bytes(Unit u);
 
@@ -64,6 +65,7 @@ void instr_tick();            // expire deferred response IRQ (lost-wakeup)
 
 bool irq_pending();
 bool busy();                  // cmd, xfer, rsp, IRQ, or deferred IRQ
+bool unit_busy(Unit u);       // this unit has an in-flight or recent media xfer
 // ONLINE posted; host has not queued another command yet (ra_putonline tsleep).
 bool host_online_wait();
 uint16_t irq_vector();        // SCB byte offset; kernel uda probe uses 0x1FC

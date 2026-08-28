@@ -8,6 +8,7 @@ void        telnet_begin(uint16_t port, bool enabled);
 void        telnet_poll();
 void        telnet_reset_guest_io();
 void        telnet_write(uint8_t c);
+void        telnet_diag_write(uint8_t c);
 
 bool        telnet_in_pop(uint8_t* out);
 

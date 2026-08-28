@@ -42,5 +42,5 @@ Template tree: [`vVaxSdCard/`](../vVaxSdCard/).
 - Phase 3 MMU PTE walk self-test.
 - Phase 4 console/clock IPR self-tests (`console OK`, `clock selftest: PASS`).
 - Ethernet NAT module present; device CSR wired in **Phase 9**.
-- Phase 7: status bar, touch GUI, full Telnet management shell (vpdp1170 parity).
+- Phase 7: status bar, touch GUI, full Telnet management shell (vpdp1170 parity). **V0.7.24** on `vax-11750`.
 - Phase 8: interpreter KIPS (baseline 50–100; first target ≥300).
