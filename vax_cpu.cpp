@@ -54,6 +54,19 @@ static uint32_t g_acv_storm_pc = 0;
 static uint32_t g_acv_storm_va = 0;
 static uint16_t g_acv_storm_count = 0;
 static bool     g_acv_storm_dumped = false;
+static bool     g_user_mmgt_arm = false;   // wait for P0 (ash), skip ld.so
+static constexpr uint8_t kUserMmgtRing = 12;
+struct UserMmgtRec {
+  const char* tag;
+  uint32_t va, pc, sp, psl;
+  uint32_t p0lr, p1lr, p0br, p1br;
+  uint8_t wr;
+};
+static UserMmgtRec g_user_mmgt_ring[kUserMmgtRing];
+static uint8_t  g_user_mmgt_head = 0;
+static uint8_t  g_user_mmgt_n = 0;
+static uint32_t g_user_mmgt_seq = 0;
+static uint32_t g_user_mmgt_dumped_seq = 0;
 static uint32_t g_chmk_log_left = 4;
 static bool     g_in_ie = false;  // nested mmgt while building a frame
 static bool     g_logged_wild_jsb = false;
@@ -2551,6 +2564,38 @@ static void raise_mmgt(uint32_t va, bool write) {
   g_st.r[R_PC] = handler;
   g_mmgt_abort = true;
 
+  // Demand-page TNV is routine. User ACV/LNV is the ash SIGSEGV class.
+  // Hold the 12 log slots until P0 (ash-class PC < 0x40000000); ld.so in
+  // P1 (7F6Exxxx) used to burn them ~10 min before /etc/rc dies.
+  if (old_cur != 0) {
+    const bool p0_pc = (fault_pc < 0x40000000u) && (fault_pc >= 0x1000u);
+    if (p0_pc && !g_user_mmgt_arm) {
+      g_user_mmgt_arm = true;
+      LOG("user mmgt: armed P0 PC=%08X", (unsigned)fault_pc);
+    }
+    // Skip zero-PTE demand-page ACV (fills the ring before /etc/rc dies).
+    // Keep LNV, NULL-page, and ACV where the PTE already has prot bits.
+    const uint32_t pte = vax_mmu::last_pte();
+    const bool null_va = (va < 0x1000u);
+    const bool prot_acv = !lnv && !tnv && (pte & vax_mmu::PTE_ACC) != 0;
+    if (g_user_mmgt_arm && !tnv && (lnv || null_va || prot_acv)) {
+      UserMmgtRec& rec = g_user_mmgt_ring[g_user_mmgt_head];
+      rec.tag = tag;
+      rec.va = va;
+      rec.pc = fault_pc;
+      rec.sp = old_sp;
+      rec.psl = old_psl;
+      rec.wr = write ? 1u : 0u;
+      rec.p0lr = vax_mmu::get_ipr(vax_mmu::IPR_P0LR);
+      rec.p1lr = vax_mmu::get_ipr(vax_mmu::IPR_P1LR);
+      rec.p0br = vax_mmu::get_ipr(vax_mmu::IPR_P0BR);
+      rec.p1br = vax_mmu::get_ipr(vax_mmu::IPR_P1BR);
+      g_user_mmgt_head = (uint8_t)((g_user_mmgt_head + 1u) % kUserMmgtRing);
+      if (g_user_mmgt_n < kUserMmgtRing) g_user_mmgt_n++;
+      g_user_mmgt_seq++;
+    }
+  }
+
 #if VVAX_DIAG_LEVEL >= 1
   const bool user_pc = (fault_pc & 0x80000000u) == 0 && fault_pc >= 0x1000u;
   const bool kern_psl = ((old_psl & PSL_CUR_MASK) == 0);
@@ -2896,6 +2941,55 @@ static void probe_rootopen() {
 }
 #endif  // VVAX_DIAG_LEVEL >= 1
 
+static void format_user_mmgt_rec(char* buf, size_t buflen, const UserMmgtRec& r) {
+  snprintf(buf, buflen,
+           "user mmgt %s VA=%08X wr=%u PC=%08X SP=%08X PSL=%08X P0LR=%08X P1LR=%08X",
+           r.tag ? r.tag : "?", (unsigned)r.va, (unsigned)r.wr,
+           (unsigned)r.pc, (unsigned)r.sp, (unsigned)r.psl,
+           (unsigned)r.p0lr, (unsigned)r.p1lr);
+}
+
+static void dump_user_mmgt_ring() {
+  if (!g_user_mmgt_arm || g_user_mmgt_n == 0) return;
+  if (g_user_mmgt_seq == g_user_mmgt_dumped_seq) return;
+  g_user_mmgt_dumped_seq = g_user_mmgt_seq;
+  LOG("user mmgt: last %u LNV/NULL/prot (seq=%u)", (unsigned)g_user_mmgt_n,
+      (unsigned)g_user_mmgt_seq);
+  uint8_t i = (g_user_mmgt_n == kUserMmgtRing) ? g_user_mmgt_head : 0;
+  char buf[192];
+  for (uint8_t k = 0; k < g_user_mmgt_n; k++) {
+    format_user_mmgt_rec(buf, sizeof(buf), g_user_mmgt_ring[i]);
+    LOG("%s", buf);
+    i = (uint8_t)((i + 1u) % kUserMmgtRing);
+  }
+}
+
+void dump_user_mmgt(void (*out)(const char* line)) {
+  if (!out) return;
+  char buf[192];
+  snprintf(buf, sizeof(buf),
+           "user mmgt: arm=%u n=%u seq=%u now P0LR=%08X P1LR=%08X P0BR=%08X P1BR=%08X",
+           g_user_mmgt_arm ? 1u : 0u, (unsigned)g_user_mmgt_n,
+           (unsigned)g_user_mmgt_seq,
+           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P0LR),
+           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P1LR),
+           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P0BR),
+           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P1BR));
+  out(buf);
+  out("user mmgt: each line is stamped at the fault; hb reprints if seq advances");
+  if (!g_user_mmgt_arm || g_user_mmgt_n == 0) {
+    g_user_mmgt_dumped_seq = g_user_mmgt_seq;
+    return;
+  }
+  uint8_t i = (g_user_mmgt_n == kUserMmgtRing) ? g_user_mmgt_head : 0;
+  for (uint8_t k = 0; k < g_user_mmgt_n; k++) {
+    format_user_mmgt_rec(buf, sizeof(buf), g_user_mmgt_ring[i]);
+    out(buf);
+    i = (uint8_t)((i + 1u) % kUserMmgtRing);
+  }
+  g_user_mmgt_dumped_seq = g_user_mmgt_seq;
+}
+
 static void exec_hb_if_due() {
   if (g_hb_hold) return;
   const uint32_t now = millis();
@@ -2924,6 +3018,7 @@ static void exec_hb_if_due() {
       (unsigned)g_st.psl, (unsigned)cur_ipl(),
       (unsigned)g_instr_count, (unsigned)ips, (unsigned)vax_clock::ticks(),
       (unsigned long long)(g_hb_elapsed_ms / 1000ull));
+  dump_user_mmgt_ring();
 #if VVAX_COPY_TRACE
   if (g_watch_hb_left) {
     g_watch_hb_left--;
@@ -5343,9 +5438,9 @@ static void exec_one() {
       Opnd idxin = decode_opnd(ACC_R, 4);
       Opnd dst = decode_opnd(ACC_W, 4);
       if (!sub.ok || !low.ok || !high.ok || !size.ok || !idxin.ok || !dst.ok) return;
-      if ((int32_t)sub.value < (int32_t)low.value || (int32_t)sub.value > (int32_t)high.value) {
-        // subscript range trap — halt for visibility until trap delivery exists
-        note_fault(3, "index");
+      if ((int32_t)sub.value < (int32_t)low.value ||
+          (int32_t)sub.value > (int32_t)high.value) {
+        raise_exception(SCB_RESOP);
         return;
       }
       uint32_t r = (sub.value + idxin.value) * size.value;
@@ -5356,16 +5451,26 @@ static void exec_one() {
     }
 
     case 0x0C:  // PROBER
-    case 0x0D: {  // PROBEW — simplified: succeed (Z=0) if length>0
+    case 0x0D: {  // PROBEW — VARM: first and last byte; V bit ignored
+      const bool wr = (op == 0x0D);
       Opnd mode = decode_opnd(ACC_R, 1);
       Opnd len = decode_opnd(ACC_R, 2);
       Opnd base = decode_opnd(ACC_A, 1);
       if (!mode.ok || !len.ok || !base.ok) return;
-      (void)mode;
-      (void)base;
+      uint32_t pm = mode.value & 3u;
+      uint32_t prv = psl_prv();
+      if (pm < prv) pm = prv;
+      uint32_t n = len.value & 0xFFFFu;
+      uint32_t a0 = base.addr;
+      uint32_t a1 = (n == 0) ? a0 : (a0 + n - 1u);
+      auto probe_ok = [&](uint32_t va) -> bool {
+        uint32_t pa = 0;
+        if (vax_mmu::translate(va, &pa, wr, pm)) return true;
+        return vax_mmu::last_fault() == vax_mmu::FLT_TNV;
+      };
       g_st.psl &= ~(PSL_N | PSL_V | PSL_Z);
-      if ((len.value & 0xFFFF) == 0) g_st.psl |= PSL_Z;  // lose if zero length
-      // C preserved
+      if (!probe_ok(a0) || !probe_ok(a1))
+        g_st.psl |= PSL_Z;
       return;
     }
 
@@ -6295,6 +6400,11 @@ void run() {
   g_acv_storm_va = 0;
   g_acv_storm_count = 0;
   g_acv_storm_dumped = false;
+  g_user_mmgt_arm = false;
+  g_user_mmgt_head = 0;
+  g_user_mmgt_n = 0;
+  g_user_mmgt_seq = 0;
+  g_user_mmgt_dumped_seq = 0;
   g_logged_user_as_kern = false;
   g_p1_rei_log_left =
 #if VVAX_DIAG_LEVEL >= 2

@@ -18,6 +18,6 @@ void host_wifi_set_sta_ip_hook(void (*fn)(uint32_t ip_host_order));
 // Called when WiFi transitions to connected (e.g. re-arm NTP).
 void host_wifi_set_up_hook(void (*fn)());
 
-// Periodic reconnect + hook dispatch. Call from net_task (~10 s cadence
-// is applied internally).
+// Link-status hooks. After a connect timeout the STA stays quiet (no
+// reconnect spam on USB). Call from net_task.
 void host_wifi_service_link();

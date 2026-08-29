@@ -44,6 +44,7 @@ static TFT_eSPI tft;
 static Freenove_ESP32_WS2812 strip(LED_COUNT, LED_PIN, LED_CHANNEL, TYPE_GRB);
 AppConfig cfg;
 static bool sd_ok = false;
+static bool g_boot_banner = true;
 static bool guest_ready = false;
 static volatile bool g_guest_restart_req = false;
 static SemaphoreHandle_t g_ui_mutex = nullptr;
@@ -115,7 +116,11 @@ static void tft_banner() {
   tft.printf("%s  %s", vvax_app_title(), vvax_app_version());
   tft.setCursor(4, 22);
   tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
+#if VAX_MODEL == VAX_MODEL_KA750
+  tft.printf("build %s  VAX 11/750", vvax_build_date());
+#else
   tft.printf("build %s  MicroVAX II", vvax_build_date());
+#endif
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
 }
 
@@ -189,6 +194,31 @@ static void sd_and_config_init() {
   } else {
     bool wifi_ok = config_load_wifi(cfg);
     bool vax_ok  = config_load_vax(cfg);
+    if (cfg.os == GUEST_OS_VMS && SD_MMC.exists("/vaxconfig-netbsd.ini")) {
+      LOG("os=vms in /vaxconfig.ini; applying /vaxconfig-netbsd.ini");
+      if (config_copy_file("/vaxconfig-netbsd.ini", VAX_CFG_PATH))
+        vax_ok = config_load_vax(cfg);
+    } else if (cfg.os == GUEST_OS_VMS &&
+               SD_MMC.exists("/disks/netbsd101-boot.dsk")) {
+      LOG("os=vms; no vaxconfig-netbsd.ini — writing NetBSD disks into %s",
+          VAX_CFG_PATH);
+      fs::File out = SD_MMC.open(VAX_CFG_PATH, FILE_WRITE);
+      if (out) {
+        out.println("[system]");
+        out.println("title = VAX 11/750 / NetBSD");
+        out.println("ram_mb = 8");
+        out.println("os = netbsd");
+        out.println("[disks]");
+        out.println("a = /disks/netbsd101-boot.dsk");
+        if (SD_MMC.exists("/disks/CD-NetBSD-10.1-vax.iso"))
+          out.println("b = /disks/CD-NetBSD-10.1-vax.iso");
+        out.println("boot = a");
+        out.close();
+        vax_ok = config_load_vax(cfg);
+      }
+    } else if (cfg.os == GUEST_OS_VMS) {
+      LOG("os=vms — VMS xxboot, not NetBSD. VAX config → vaxconfig-netbsd.ini");
+    }
     tft_status(ROW_CFG, "Cfg:   ",
                (wifi_ok && vax_ok) ? "loaded split cfg" : "wrote default cfg",
                (wifi_ok && vax_ok) ? TFT_GREEN : TFT_YELLOW);
@@ -215,7 +245,10 @@ static void mount_mscp_drives() {
     if (vax_mscp::mount(vax_mscp::UNIT_B, cfg.disk_b.c_str())) mounted++;
   }
   snprintf(line, sizeof(line), "%d/2 mounted", mounted);
-  tft_status(ROW_MSCP, "MSCP:  ", line, mounted ? TFT_GREEN : TFT_YELLOW);
+  if (g_boot_banner)
+    tft_status(ROW_MSCP, "MSCP:  ", line, mounted ? TFT_GREEN : TFT_YELLOW);
+  else
+    LOG("MSCP: %s", line);
 }
 
 static bool alloc_guest_ram() {
@@ -293,6 +326,12 @@ static void apply_ethernet_nat() {
 }
 
 static void guest_cold_start() {
+  if (sd_ok) {
+    config_load_vax(cfg);
+    LOG("guest start: os=%s a=\"%s\" b=\"%s\"",
+        config_guest_os_name(cfg.os), cfg.disk_a.c_str(), cfg.disk_b.c_str());
+  }
+  mount_mscp_drives();
   vax_mmu::reset();
   vax_console::reset();
   if (cfg.clock_enabled) vax_clock::reset();
@@ -413,6 +452,7 @@ void setup() {
   }
 
   ui_begin(&tft, g_ui_mutex);
+  g_boot_banner = false;
   xTaskCreatePinnedToCore(render_task, "render", 4096, nullptr, 1, nullptr, 0);
 
   led(0, 32, 0);

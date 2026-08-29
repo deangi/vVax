@@ -423,10 +423,16 @@ static void handle_config(int x, int y, Screen back, const char* dst) {
   if (i < 0 || i >= g_ncfgs) return;
   char src[64];
   snprintf(src, sizeof(src), "/%s", g_cfgs[i]);
-  if (config_copy_file(src, dst))
-    LOG("config: copied %s -> %s (reboot host)", src, dst);
-  else
+  if (config_copy_file(src, dst)) {
+    LOG("config: copied %s -> %s", src, dst);
+    if (!strcmp(dst, VAX_CFG_PATH)) {
+      host_request_guest_restart();
+      close_menu();
+      return;
+    }
+  } else {
     LOGE("config: copy %s failed", src);
+  }
   g_scr = SCR_MAIN;
   draw_menu();
 }

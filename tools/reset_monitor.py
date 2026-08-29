@@ -21,12 +21,13 @@ except ImportError as exc:
 
 def hard_reset(ser: serial.Serial) -> None:
     # Pulse EN (RTS); keep DTR clear so GPIO0 is not held in download mode.
+    # USB-Serial/JTAG on the S3 needs a longer EN low than classic UART.
     print("=== hard reset via RTS/EN (DTR clear) ===", flush=True)
     ser.dtr = False
     ser.rts = False
     time.sleep(0.05)
     ser.rts = True
-    time.sleep(0.15)
+    time.sleep(0.5)
     ser.rts = False
     ser.dtr = False
 
@@ -37,6 +38,8 @@ def main() -> int:
     ap.add_argument("--baud", type=int, default=115200)
     ap.add_argument("--timeout", type=float, default=1800.0,
                     help="seconds to capture after reset")
+    ap.add_argument("--min-seconds", type=float, default=0.0,
+                    help="ignore stop needles until this many seconds have elapsed")
     ap.add_argument("--no-reset", action="store_true")
     ap.add_argument("--no-boot-netbsd", action="store_true")
     ap.add_argument("--log", default="",
@@ -76,6 +79,8 @@ def main() -> int:
         b"login:",
     )
     typed_boot = False
+    poked_cd = False
+    poke_t = 0.0
     buf = bytearray()
     t0 = time.monotonic()
     print(f"=== monitor {args.port} timeout={args.timeout:.0f}s log={log_path} ===",
@@ -84,18 +89,30 @@ def main() -> int:
     with log_path.open("wb") as logf:
         while time.monotonic() - t0 < args.timeout:
             chunk = ser.read(4096)
-            if not chunk:
-                continue
-            logf.write(chunk)
-            logf.flush()
-            sys.stdout.buffer.write(chunk)
-            sys.stdout.buffer.flush()
-            buf.extend(chunk)
-            if len(buf) > 256 * 1024:
-                del buf[: len(buf) - 128 * 1024]
+            if chunk:
+                logf.write(chunk)
+                logf.flush()
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.buffer.flush()
+                buf.extend(chunk)
+                if len(buf) > 256 * 1024:
+                    del buf[: len(buf) - 128 * 1024]
 
-            if (not args.no_boot_netbsd and not typed_boot
-                    and b"Device not configured" in buf and b">" in buf[-80:]):
+            # Match the manual console: CR aborts the /boot countdown, then
+            # `boot netbsd` at the prompt. Never type after the kernel is in S0
+            # (a late inject stalled uda STEP1 on unattended captures).
+            in_kernel = (b"enter S0" in buf or b"NetBSD 10.1 (GENERIC)" in buf
+                         or b"mainbus0 (root)" in buf)
+            if (not args.no_boot_netbsd and not poked_cd and not in_kernel
+                    and b"abort autoboot" in buf):
+                print("\n=== inject CR (abort autoboot) ===", flush=True)
+                ser.write(b"\r")
+                ser.flush()
+                poked_cd = True
+                poke_t = time.monotonic()
+            if (not args.no_boot_netbsd and not typed_boot and not in_kernel
+                    and (b"Device not configured" in buf
+                         or (poked_cd and time.monotonic() - poke_t >= 1.5))):
                 print("\n=== inject boot netbsd ===", flush=True)
                 ser.write(b"boot netbsd\r")
                 ser.flush()
@@ -105,9 +122,11 @@ def main() -> int:
             halt_after_guest = (
                 guest >= 0 and b"VAX HALT at PC=" in buf[guest:]
             )
-            if any(n in buf for n in stop_needles) or halt_after_guest:
+            elapsed = time.monotonic() - t0
+            if elapsed >= args.min_seconds and (
+                    any(n in buf for n in stop_needles) or halt_after_guest):
                 # Keep a few extra seconds so trailing lines land.
-                extra_until = time.monotonic() + 8.0
+                extra_until = time.monotonic() + 40.0
                 while time.monotonic() < extra_until:
                     more = ser.read(4096)
                     if more:
@@ -137,6 +156,8 @@ def main() -> int:
         ("reserved", "VAX reserved inst"),
         ("fpa", "fpa: op="),
         ("rc.subr", "/etc/rc.subr:"),
+        ("user_mmgt", "user mmgt"),
+        ("abnormal", "terminated abnormally"),
         ("single_user", "Enter pathname of shell"),
         ("panic", "panic:"),
         ("halt", "VAX HALT"),

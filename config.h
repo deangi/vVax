@@ -4,7 +4,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.7.27"
+#define APP_VERSION     "V0.7.34"
 // Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
 // rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)

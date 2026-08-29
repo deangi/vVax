@@ -35,7 +35,7 @@ Do not treat stubs as a runnable VAX ISA yet.
 - `[diag] mscp_dump_flags=` / `mscp_dump_count=` USB-serial tracing
 - Boot from unit A; optional second pack / ISO on unit B
 
-## Phase 6 — NetBSD try (in progress)
+## Phase 6 — NetBSD try (C8 closed: single-user only)
 
 - Host FROM750-style bootstrap: load MSCP LBA 0–15, PC=`0x0C`, R6=ROM-read stub
 - No proprietary KA630/VMB ROM; `[disks] boot=a|b` selects unit
@@ -282,6 +282,47 @@ open. Telnet `Esc >` registers `host_lib/shell_*`: `ls`/`cd`/`pwd`,
 USB LOG also copies to Telnet diag when the guest console is attached.
 SNTP UTC → TODR/TOY when the guest has not `mtpr`'d TODR. Flash
 `vVax V0.7.24`.
+
+**V0.7.27:** Phase 7 on the board: DU grey/green/yellow, TEL grey/yellow/green,
+15 ms FT6336U task (double-tap reliable). Pushed `b300ceb`.
+
+**V0.7.28:** PROBER/PROBEW walk PTEs (TNV still accessible; ACV/LNV sets Z).
+INDEX range is reserved-operand, not a host halt. Log the first 12 user
+ACV/LNV (not TNV) for the ash SIGSEGV on `/etc/rc.subr`. Flash `vVax V0.7.28`.
+
+**V0.7.29–V0.7.34 (C8 closed, 29 Aug 2026):** Host tools to capture the
+`/etc/rc` abort, then UVM proof it is not an ISA miss.
+
+- V0.7.29: reload `/vaxconfig.ini` on guest restart; quiet WiFi after STA
+  timeout (this site has no `dg17`).
+- V0.7.30–31: arm user-mmgt logs on P0 ash PC; 12-slot ACV/LNV ring + 30 s
+  heartbeat dump.
+- V0.7.32–33: USB one-shot host shell `~>>cmd` or `` `>>cmd `` (start of
+  line); `dq` dumps a 128-line `LOG` ring + live mmgt. Output teed to USB.
+- V0.7.34: stamp `P0LR`/`P1LR` on each ring record; keep LNV / `VA<0x1000`
+  / prot ACV (zero-PTE demand page dropped).
+
+**C8 finding (not an emulator opcode bug):** GENERIC reaches `root on ra0a`,
+userland, and single-user `#`. `init: '/bin/sh' on '/etc/rc' terminated
+abnormally` is ash **SIGSEGV** (`wait` `0xb`) while sourcing `/etc/rc.subr`.
+Stamped faults: `ACV LNV VA=7F400000 wr=1` with `P1LR=001FA800` (P1 floor
+`0x7F500000`) then `P1LR=001FA000` (1 MB downward heap grow). Same grow
+again before init’s message. `PC=00022437` NULL read is earlier and not
+the last fault.
+
+Guest UVM on the `#` prompt after abort (`vmstat -s`): **4096-byte software
+pages**, **801 pages managed (~3.2 MB)** — same as dmesg `avail memory =
+3156 KB`. **31 free vs 32 minimum free**. **0 swap devices / 0 swap pages.**
+`swapctl -l`: `no swap device configured`. `dumps on ra0b` is the dump
+slice only; `swapctl -A` runs later in `/etc/rc`, after `rc.subr`. A 1 MB
+grow is 256 UVM pages; it cannot succeed. First grow sometimes lands;
+the second hits the reserve and SIGSEGVs.
+
+ESP32 PSRAM cannot host more than **8 MB** guest RAM (already the INI max).
+Editing `/etc/rc` / `rc.subr` is out of scope. Multiuser NetBSD 10.1 on
+this 8 MB KA750 image is **not practical**. C8 stops here: single-user `#`
+is the success line; `/etc/rc` is a guest memory/swap-order limit, not a
+vVax ISA gate. Do not re-open CMPB/xot/C7 for this abort.
 
 ## Phase 7 — Host UX parity (vpdp1170)
 

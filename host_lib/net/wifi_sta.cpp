@@ -2,11 +2,13 @@
 #include "platform.h"
 
 #include <WiFi.h>
+#include <esp_log.h>
 
 static void (*g_sta_ip_hook)(uint32_t) = nullptr;
 static void (*g_up_hook)() = nullptr;
 static uint32_t g_wifi_ms = 0;
 static bool g_wifi_was_up = false;
+static bool g_wifi_quiet = false;
 static constexpr uint32_t kLinkCheckMs = 10000;
 
 static uint32_t ip_to_host_order(IPAddress ip) {
@@ -24,12 +26,20 @@ uint32_t host_wifi_sta_ip() {
   return ip_to_host_order(WiFi.localIP());
 }
 
+static void wifi_stop_spam() {
+  g_wifi_quiet = true;
+  WiFi.setAutoReconnect(false);
+  // IDF logs "sta is connecting, return error" at ERROR on every reconnect().
+  esp_log_level_set("wifi", ESP_LOG_NONE);
+}
+
 HostWifiConnectResult host_wifi_connect(const char* ssid, const char* pass,
                                         const char* hostname,
                                         uint32_t timeout_ms) {
   HostWifiConnectResult r;
   if (!ssid || !ssid[0]) {
     LOGE("WiFi SSID is empty - set [wifi] ssid= in wificonfig.ini");
+    wifi_stop_spam();
     return r;
   }
   if (!hostname) hostname = "esp32";
@@ -37,16 +47,13 @@ HostWifiConnectResult host_wifi_connect(const char* ssid, const char* pass,
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(hostname);
-  WiFi.setAutoReconnect(true);
+  WiFi.setAutoReconnect(false);
   WiFi.begin(ssid, pass);
 
   LOG("WiFi connecting to \"%s\" (hostname=%s) ...", ssid, hostname);
   uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeout_ms) {
+  while (WiFi.status() != WL_CONNECTED && millis() - start < timeout_ms)
     delay(250);
-    Serial.print('.');
-  }
-  Serial.println();
 
   if (WiFi.status() == WL_CONNECTED) {
     r.ok = true;
@@ -57,7 +64,10 @@ HostWifiConnectResult host_wifi_connect(const char* ssid, const char* pass,
     if (g_sta_ip_hook) g_sta_ip_hook(r.sta_ip_host_order);
     if (g_up_hook) g_up_hook();
   } else {
-    LOGE("WiFi connect timed out");
+    LOGE("WiFi connect timed out; USB console only");
+    wifi_stop_spam();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
     g_wifi_was_up = false;
     if (g_sta_ip_hook) g_sta_ip_hook(0);
   }
@@ -71,14 +81,16 @@ void host_wifi_service_link() {
     g_up_hook();
   g_wifi_was_up = wifi_up;
 
+  if (g_wifi_quiet)
+    return;
+
   uint32_t now = millis();
   if (now - g_wifi_ms < kLinkCheckMs) return;
   g_wifi_ms = now;
 
   if (st == WL_DISCONNECTED || st == WL_CONNECTION_LOST ||
       st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL) {
-    LOGE("WiFi link down (status=%d) - reconnecting", (int)st);
-    WiFi.reconnect();
+    wifi_stop_spam();
     if (g_sta_ip_hook) g_sta_ip_hook(0);
   } else if (st == WL_CONNECTED) {
     if (g_sta_ip_hook) g_sta_ip_hook(ip_to_host_order(WiFi.localIP()));

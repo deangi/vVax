@@ -36,17 +36,20 @@ static volatile bool g_active = false;
 static char g_input_line[SHELL_LINE_MAX + 1];
 static size_t g_input_len = 0;
 static char g_commands[SHELL_QUEUE_DEPTH][SHELL_LINE_MAX + 1];
+static bool g_commands_usb[SHELL_QUEUE_DEPTH];
 static volatile uint8_t g_command_head = 0;
 static volatile uint8_t g_command_tail = 0;
 EXT_RAM_BSS_ATTR static uint8_t g_output_storage[SHELL_OUTPUT_BYTES];
 static Fifo g_output;
 static bool g_initialized = false;
 static bool g_cmds_registered = false;
+static bool g_usb_tee = false;
 static char g_cwd[128] = "/";
 
 static void output_char(uint8_t value) {
   g_output.push(value);
   if (value == 255) g_output.push(value);
+  if (g_usb_tee && Serial) Serial.write(value);
 }
 
 static void output_text(const char* text) {
@@ -56,21 +59,30 @@ static void output_text(const char* text) {
 
 static void prompt() { output_text("vVax:/> "); }
 
-static bool queue_command(const char* command) {
+static bool queue_command(const char* command, bool usb) {
   uint8_t next = (uint8_t)((g_command_head + 1) % SHELL_QUEUE_DEPTH);
   if (next == g_command_tail) return false;
   strncpy(g_commands[g_command_head], command, SHELL_LINE_MAX);
   g_commands[g_command_head][SHELL_LINE_MAX] = 0;
+  g_commands_usb[g_command_head] = usb;
   g_command_head = next;
   return true;
 }
 
-static bool pop_command(char* command, size_t size) {
+static bool pop_command(char* command, size_t size, bool* usb) {
   if (g_command_head == g_command_tail) return false;
   strncpy(command, g_commands[g_command_tail], size - 1);
   command[size - 1] = 0;
+  if (usb) *usb = g_commands_usb[g_command_tail];
   g_command_tail = (uint8_t)((g_command_tail + 1) % SHELL_QUEUE_DEPTH);
   return true;
+}
+
+static void drain_output_fifo() {
+  const uint8_t* data = nullptr;
+  size_t n;
+  while ((n = g_output.peek(&data)) > 0)
+    g_output.consume(n);
 }
 
 static int split_args(char* line, char** argv, int max) {
@@ -220,9 +232,24 @@ static const char* guest_restart_help() {
   return "cold boot / remount";
 }
 
+static void cmd_dq_line(const char* line) {
+  if (!line) return;
+  shell_out_text(line);
+  shell_out_text("\r\n");
+}
+
+static void cmd_dq(int, char**) {
+  unsigned n = host_log_ring_count();
+  shell_out_printf("--- host log ring (%u) ---\r\n", n);
+  host_log_ring_dump(cmd_dq_line);
+  shell_out_text("--- user mmgt ---\r\n");
+  vax_cpu::dump_user_mmgt(cmd_dq_line);
+}
+
 static void cmd_help(int, char**) {
   shell_print_help();
   shell_out_text("  exit                       return to VAX console\r\n");
+  shell_out_text("  USB one-shot: start of line ~>>cmd<CR> or `>>cmd<CR>\r\n");
 }
 
 static void cmd_status(int, char**) {
@@ -417,11 +444,19 @@ static void register_commands() {
   static const char* reg_alias[] = { "registers", nullptr };
   shell_register("regs", cmd_regs, "regs                       dump GPRs / PSL",
                  reg_alias, "VAX commands");
+  static const char* dq_alias[] = { "dlog", "dumpq", nullptr };
+  shell_register("dq", cmd_dq,
+                 "dq                         dump host log ring + user mmgt",
+                 dq_alias, "Host commands");
 }
 
 static void run_command(const char* line) {
   if (!line || !*line) return;
   if (!strcasecmp(line, "exit") || !strcasecmp(line, "quit")) {
+    if (!g_active) {
+      output_text("already at console\r\n");
+      return;
+    }
     telnet_shell_disconnect();
     output_text("returning to console\r\n");
     return;
@@ -467,7 +502,7 @@ bool telnet_shell_input(uint8_t c) {
   if (!g_active) return false;
   if (c == '\r') {
     g_input_line[g_input_len] = 0;
-    queue_command(g_input_line);
+    queue_command(g_input_line, false);
     g_input_len = 0;
     return false;
   }
@@ -484,10 +519,26 @@ bool telnet_shell_backspace() {
   return true;
 }
 
+void telnet_shell_queue_usb(const char* line) {
+  telnet_shell_init();
+  if (!line) return;
+  if (!queue_command(line, true))
+    Serial.print("[vVax ~>>] busy\r\n");
+}
+
 void telnet_shell_poll() {
   char cmd[SHELL_LINE_MAX + 1];
-  while (pop_command(cmd, sizeof(cmd)))
+  bool usb = false;
+  while (pop_command(cmd, sizeof(cmd), &usb)) {
+    g_usb_tee = usb;
     run_command(cmd);
+    g_usb_tee = false;
+    if (usb) {
+      if (!g_active) drain_output_fifo();
+      Serial.print("[vVax ~>> done]\r\n");
+      Serial.flush();
+    }
+  }
 }
 
 size_t telnet_shell_output_peek(const uint8_t** data) {

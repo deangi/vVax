@@ -25,6 +25,7 @@ static bool     g_mapen = false;
 static PhysRead32Fn  g_rd = nullptr;
 static PhysWrite32Fn g_wr = nullptr;
 static uint8_t       g_fault = FLT_OK;
+static uint32_t      g_last_pte = 0;
 
 // SIMH vax_mmu.c cvtacc[]: PTE access field → {user,supv,exec,kern} R in
 // bits 0–3 and W in bits 4–7. Index 0/1 (no access / reserved) are 0 so a
@@ -36,6 +37,7 @@ static const uint8_t cvtacc[16] = {
 };
 
 uint8_t last_fault() { return g_fault; }
+uint32_t last_pte() { return g_last_pte; }
 
 void set_phys_ops(PhysRead32Fn rd, PhysWrite32Fn wr) {
   g_rd = rd;
@@ -97,10 +99,12 @@ static bool pte_allows(uint32_t pte, bool write, uint32_t mode) {
 static bool walk_pte(uint32_t pte_pa, uint32_t va, uint32_t* pa, bool write,
                      uint32_t mode) {
   if (!g_rd) {
+    g_last_pte = 0;
     g_fault = FLT_ACV;
     return false;
   }
   uint32_t pte = g_rd(pte_pa);
+  g_last_pte = pte;
   // SIMH fill(): access before valid. Zero PTE (acc=0) is ACV so NetBSD
   // Xaccess_v → uvm_fault. TNV is only for V=0 with protection already set
   // (pmap_simulref re-validates and REIs).
@@ -145,6 +149,7 @@ static bool walk_process_pte(uint32_t pte_va, uint32_t va, uint32_t* pa,
 
 bool translate(uint32_t va, uint32_t* pa, bool write, uint32_t cur_mode) {
   g_fault = FLT_OK;
+  g_last_pte = 0;
   if (!g_mapen) {
     if (pa) *pa = va & PAMASK;
     return true;

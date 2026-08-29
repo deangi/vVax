@@ -2,6 +2,7 @@
 #include "config.h"
 #include "console.h"
 #include "telnet.h"
+#include "telnet_shell.h"
 #include "fifo.h"
 #include "platform.h"
 
@@ -27,6 +28,23 @@ static uint8_t  rxdb = 0;
 // irq_tx() livelocks after gencninit's mtpr(GC_TIE) (port-vax 2023-12-26).
 static bool rx_irq_latched = false;
 static bool tx_irq_latched = false;
+
+// USB ~>> or `>> one-shot into the host shell (starter only at start of line).
+// No timeout: next key either continues the escape or flushes the held prefix.
+enum UsbEsc : uint8_t {
+  USB_ESC_IDLE = 0,
+  USB_ESC_STARTER,
+  USB_ESC_STARTER_GT,
+  USB_ESC_CMD
+};
+static uint8_t  g_usb_esc = USB_ESC_IDLE;
+static uint8_t  g_usb_starter = '~';
+static bool     g_usb_bol = true;
+static bool     g_usb_skip_lf = false;
+static char     g_usb_cmd[256];
+static size_t   g_usb_cmd_len = 0;
+
+static bool usb_is_starter(uint8_t c) { return c == '~' || c == '`'; }
 
 static bool slu_ready_ie(uint32_t csr) {
   return (csr & (CSR_DONE | CSR_IE)) == (CSR_DONE | CSR_IE);
@@ -55,6 +73,11 @@ void reset() {
   rxdb = 0;
   rx_irq_latched = false;
   tx_irq_latched = false;
+  g_usb_esc = USB_ESC_IDLE;
+  g_usb_starter = '~';
+  g_usb_bol = true;
+  g_usb_skip_lf = false;
+  g_usb_cmd_len = 0;
 }
 
 void put_guest(uint8_t c) {
@@ -74,11 +97,94 @@ void inject(uint8_t c) {
   rxq.push(c);
 }
 
+static void usb_flush_held(uint8_t extra) {
+  if (g_usb_esc == USB_ESC_STARTER)
+    rxq.push(g_usb_starter);
+  else if (g_usb_esc == USB_ESC_STARTER_GT) {
+    rxq.push(g_usb_starter);
+    rxq.push('>');
+  }
+  g_usb_esc = USB_ESC_IDLE;
+  if (extra) {
+    g_usb_bol = (extra == '\r' || extra == '\n');
+    rxq.push(extra);
+  } else {
+    g_usb_bol = false;
+  }
+}
+
+static void usb_handle(uint8_t c) {
+  if (g_usb_skip_lf) {
+    g_usb_skip_lf = false;
+    if (c == '\n') return;
+  }
+
+  if (g_usb_esc == USB_ESC_CMD) {
+    if (c == 0x03) {
+      g_usb_esc = USB_ESC_IDLE;
+      g_usb_cmd_len = 0;
+      g_usb_bol = true;
+      Serial.print("^C\r\n");
+      return;
+    }
+    if (c == 0x08 || c == 0x7f) {
+      if (g_usb_cmd_len) {
+        g_usb_cmd_len--;
+        Serial.print("\b \b");
+      }
+      return;
+    }
+    if (c == '\r' || c == '\n') {
+      g_usb_cmd[g_usb_cmd_len] = 0;
+      g_usb_esc = USB_ESC_IDLE;
+      g_usb_bol = true;
+      g_usb_skip_lf = (c == '\r');
+      Serial.print("\r\n");
+      telnet_shell_queue_usb(g_usb_cmd);
+      g_usb_cmd_len = 0;
+      return;
+    }
+    if (c >= 32 && c < 127 && g_usb_cmd_len + 1 < sizeof(g_usb_cmd)) {
+      g_usb_cmd[g_usb_cmd_len++] = (char)c;
+      Serial.write(c);
+    }
+    return;
+  }
+
+  if (g_usb_esc == USB_ESC_IDLE) {
+    if (g_usb_bol && usb_is_starter(c)) {
+      g_usb_esc = USB_ESC_STARTER;
+      g_usb_starter = c;
+      return;
+    }
+    g_usb_bol = (c == '\r' || c == '\n');
+    rxq.push(c);
+    return;
+  }
+
+  if (g_usb_esc == USB_ESC_STARTER) {
+    if (c == '>') {
+      g_usb_esc = USB_ESC_STARTER_GT;
+      return;
+    }
+    usb_flush_held(c);
+    return;
+  }
+
+  if (c == '>') {
+    g_usb_esc = USB_ESC_CMD;
+    g_usb_cmd_len = 0;
+    Serial.print("\r\n[vVax ~>>] ");
+    return;
+  }
+  usb_flush_held(c);
+}
+
 static void harvest_keys() {
   if (!inited) begin();
   while (Serial.available() > 0) {
     int v = Serial.read();
-    if (v >= 0) rxq.push((uint8_t)v);
+    if (v >= 0) usb_handle((uint8_t)v);
   }
   uint8_t c;
   while (telnet_in_pop(&c)) rxq.push(c);
