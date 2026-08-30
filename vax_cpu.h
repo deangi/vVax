@@ -56,7 +56,4 @@ size_t   ram_bytes();
 State&   state();
 uint32_t instr_count();  // monotonic; status-bar KIPS uses deltas
 
-// Current user ACV/LNV ring + P0/P1 length registers. Does not use LOG.
-void dump_user_mmgt(void (*out)(const char* line));
-
 }  // namespace vax_cpu

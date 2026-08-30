@@ -33,6 +33,7 @@ Do not treat stubs as a runnable VAX ISA yet.
 - Chunked SD transfers; ring post always, IRQ deferred/one-shot at IPL 14
 - CPU phys DMA ops + `poll()` in main loop; cold-boot UQSSP init self-test
 - `[diag] mscp_dump_flags=` / `mscp_dump_count=` USB-serial tracing
+- `[diag] pctrace=on|off` last-128 insn ring (PC/regs); `VVAX_PCTRACE 0` compiles it out
 - Boot from unit A; optional second pack / ISO on unit B
 
 ## Phase 6 — NetBSD try (C8 closed: single-user only)
@@ -301,6 +302,41 @@ ACV/LNV (not TNV) for the ash SIGSEGV on `/etc/rc.subr`. Flash `vVax V0.7.28`.
   line); `dq` dumps a 128-line `LOG` ring + live mmgt. Output teed to USB.
 - V0.7.34: stamp `P0LR`/`P1LR` on each ring record; keep LNV / `VA<0x1000`
   / prot ACV (zero-PTE demand page dropped).
+
+**V0.7.35:** Drop the V0.7.29 host-boot override that copied
+`/vaxconfig-netbsd.ini` (or rewrote NetBSD disks) whenever
+`/vaxconfig.ini` had `os=vms`. Power-on now uses the INI as written.
+Guest restart still reloads `/vaxconfig.ini`. Flash `vVax V0.7.35`.
+
+**V0.7.36:** Remove NetBSD-only diagnostics (user-mmgt ring/`dq`, ash
+`xot` PC triggers, GENERIC kprobe/`root hb`, `/boot` fingerprint, niclose
+and sa_iot plant logs). Keep `hb:` and MSCP logs. Functional plants
+(hopp, niclose, ctuattach, MARK_END, sa_iot) stay. Flash `vVax V0.7.36`.
+
+**V0.7.37:** C10 on user `vms7.2.dsk` (SIMH `vax750` boots VMS 7.2). V0.7.36
+USB: xxboot ROM-reads LBN 194985+, `MCTL mcsr2=0x01011555`, relocate
+`25583 bytes 000089D5 -> 000FFE44` leftovers `R1=0000EDC4 R3=00106233`
+(V0.7.23), then HALT `PC=00000388` zeros (`SP=0000DFF4` AP=SCBB). Not the
+ISO `PC=0000000C` miss. Post-relocate: dump SYSBOOT header/entry/SCB, first
+16 insns, JMP/JSB/REI/CALLS, exceptions, MCHK. Flash `vVax V0.7.37`.
+
+**V0.7.38:** `[diag] pctrace=on|off` last-128 insn ring (PC, opcode, R0–SP,
+PSL) dumped on HALT/fault. Compiled out with `VVAX_PCTRACE 0`. Default INI
+off. Flash `vVax V0.7.38`.
+
+**V0.7.39:** VMS relocate plant is memcpy only. V0.7.38 pctrace: `CLRQ`
+loop at `0x8ACC`, `JSB` to 0, `RET` to `000FFEC4`, then leftover rewrite
+zeroed `R4`/`R5=000FFE91` and set `R1=src+n` for `EXTZV` vpos. Log
+`R0–R11` before the copy; do not touch GPRs. Flash `vVax V0.7.39`.
+
+**V0.7.40:** V0.7.39 kept GPRs; `dst+0x80` is `EXTZV R1,#2,R0,R9` (register
+field). Disk: `JSB @L^disp(PC)` at `0x6E01` loads `0000055D` (zeros; inside
+the `0x4F0–0x600` clear). After memcpy set `R1=0` so `DECL`/`SOBGEQ` fall
+through. Log VMS `JSB dest<0x200`. Flash `vVax V0.7.40`.
+
+**V0.7.41:** V0.7.40 fell through, then `BSBW` at `000FFF12` → `000FE225`
+zeros. Same insn at `00008AA3` targets `00006DB6`. After memcpy set
+`PC=src+(pc-dst)` (`00008A55`) and keep `R1=0`. Flash `vVax V0.7.41`.
 
 **C8 finding (not an emulator opcode bug):** GENERIC reaches `root on ra0a`,
 userland, and single-user `#`. `init: '/bin/sh' on '/etc/rc' terminated

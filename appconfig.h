@@ -51,6 +51,7 @@ struct AppConfig {
   // [diag] — MSCP serial dump (flags: csr,init,ring,cmd,xfer,irq,all | 0xNN)
   String   mscp_dump_flags;     // raw token list / hex from INI
   uint32_t mscp_dump_count = 0; // max log lines; 0 = off
+  bool     pctrace = false;     // last-N insn ring; dump on HALT (needs VVAX_PCTRACE)
 };
 
 extern AppConfig cfg;

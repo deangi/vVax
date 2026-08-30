@@ -58,7 +58,6 @@ void     set_ipr(uint32_t ipr, uint32_t value);
 // Returns false on ACV / TNV / LNV; last_fault() says which.
 bool translate(uint32_t va, uint32_t* pa, bool write, uint32_t cur_mode = 0);
 uint8_t last_fault();
-uint32_t last_pte();  // PTE from the last walk (0 if LNV before the walk)
 void invalidate_tb();
 
 // Self-check: map one page, read/write through it (requires phys ops + RAM).

@@ -8,6 +8,7 @@
 #include "vax_boot.h"
 #include "vax_uba.h"
 #include "vax_fpa.h"
+#include "vax_pctrace.h"
 #include "platform.h"
 
 #include <Arduino.h>
@@ -54,19 +55,6 @@ static uint32_t g_acv_storm_pc = 0;
 static uint32_t g_acv_storm_va = 0;
 static uint16_t g_acv_storm_count = 0;
 static bool     g_acv_storm_dumped = false;
-static bool     g_user_mmgt_arm = false;   // wait for P0 (ash), skip ld.so
-static constexpr uint8_t kUserMmgtRing = 12;
-struct UserMmgtRec {
-  const char* tag;
-  uint32_t va, pc, sp, psl;
-  uint32_t p0lr, p1lr, p0br, p1br;
-  uint8_t wr;
-};
-static UserMmgtRec g_user_mmgt_ring[kUserMmgtRing];
-static uint8_t  g_user_mmgt_head = 0;
-static uint8_t  g_user_mmgt_n = 0;
-static uint32_t g_user_mmgt_seq = 0;
-static uint32_t g_user_mmgt_dumped_seq = 0;
 static uint32_t g_chmk_log_left = 4;
 static bool     g_in_ie = false;  // nested mmgt while building a frame
 static bool     g_logged_wild_jsb = false;
@@ -91,19 +79,16 @@ static uint32_t g_warp_holdoff_ms = 0;
 #endif
 static uint32_t g_warp_fires = 0;
 static bool     g_guest_vms = false;
-#if VVAX_DIAG_LEVEL >= 1
-static bool     g_rootopen_trace = false;
-static uint32_t g_root_hb_ms = 0;
-#endif
+static bool     g_vms_reloc_done = false;
+static uint8_t  g_vms_tr_left = 0;
+static uint8_t  g_vms_xfer_left = 0;
+static uint8_t  g_vms_exc_left = 0;
 static uint32_t g_hb_last_ms = 0;
 static uint32_t g_hb_last_instr = 0;
 static uint64_t g_hb_elapsed_ms = 0;
 static bool     g_hb_hold = false;  // after REI dump: stop USB hb so the log can be copied
 static uint8_t  g_mscp_irq_logs = 12;
 static uint8_t  g_mscp_blocked_logs = 8;
-#if VVAX_DIAG_LEVEL >= 1
-static bool     g_reset_probes = false;
-#endif
 #if VVAX_COPY_TRACE
 // One-shot USB dump of kernel copyin/copyout into user P0/P1 (sh vs cat).
 static uint8_t  g_user_copy_logs = 8;
@@ -131,9 +116,6 @@ static uint8_t  g_tx_log = 0;
 static uint8_t  g_name_libc = 0;
 static uint8_t  g_insn_dump = 0;
 static uint8_t  g_case_log = 0;
-#endif
-#if VVAX_XOT_ISO
-static uint8_t  g_xot_iso_left = 8;
 #endif
 
 static bool     pa_ok(uint32_t pa, size_t n);
@@ -1791,29 +1773,6 @@ static void set_cmp_byte(uint8_t a, uint8_t b) {
   if (a < b) g_st.psl |= PSL_C;
 }
 
-#if VVAX_XOT_ISO
-// Ash argstr switch is cmpb $0x8C / blss. VARM CMP: N=LSS, V=0.
-static void log_xot_cmpb(uint8_t src, uint8_t dst) {
-  if (g_xot_iso_left == 0 || psl_cur() != 3u) return;
-  const uint32_t pc = g_last_op_pc;
-  if (pc < 0x0001C000u || pc >= 0x0001C280u) return;
-  if (src != 0x8Cu && dst != 0x8Cu && src != 0x80u && dst != 0x80u) return;
-  g_xot_iso_left--;
-  uint8_t nxt = 0;
-  peek_va8(g_st.r[R_PC], &nxt, nullptr);
-  const uint32_t psl = g_st.psl;
-  const unsigned n = (psl & PSL_N) ? 1u : 0u;
-  const unsigned z = (psl & PSL_Z) ? 1u : 0u;
-  const unsigned v = (psl & PSL_V) ? 1u : 0u;
-  const unsigned c = (psl & PSL_C) ? 1u : 0u;
-  const int simh_n = ((int8_t)src < (int8_t)dst) ? 1 : 0;
-  LOG("xot: CMPB src=%02X dst=%02X PC=%08X NZVC=%u%u%u%u next=%02X "
-      "blss_N=%u blss_Nv=%u simhN=%u R2=%08X R11=%08X",
-      (unsigned)src, (unsigned)dst, (unsigned)pc, n, z, v, c, (unsigned)nxt,
-      n, n ^ v, (unsigned)simh_n, (unsigned)g_st.r[2], (unsigned)g_st.r[11]);
-}
-#endif
-
 // Bit-branch base (.wb): Rn → bit in register; else byte address.
 struct BbBase {
   bool ok = false;
@@ -2097,8 +2056,6 @@ static void stub_ctuattach(uint32_t entry) {
   g_ram[pa + 1] = 0;
   g_ram[pa + 2] = 0x04;  // RET — same plant as niclose
   g_ctuattach_stubbed = true;
-  LOG("boot: ctuattach stub @%08X (skip TU58 bufq_alloc before bufq_init)",
-      (unsigned)entry);
 }
 
 // NetBSD 10 cmi_attach never sets sa.sa_iot (sbi_attach_args +12).
@@ -2200,15 +2157,11 @@ static uint32_t find_vax_mem_bus_space() {
   const uint32_t str_va = ram_find_str("vax_mem_bus_alloc");
   if (!str_va) {
     g_vax_mem_bus_space_miss = true;
-    LOG("boot: vax_mem_bus_alloc string not found");
     return 0;
   }
-  uint8_t spec = 0;
-  uint32_t alloc_fn = ram_find_str_fn(str_va, &spec);
+  uint32_t alloc_fn = ram_find_str_fn(str_va, nullptr);
   if (!alloc_fn) {
     g_vax_mem_bus_space_miss = true;
-    LOG("boot: vax_mem_bus_space_alloc xref not found str=%08X",
-        (unsigned)str_va);
     return 0;
   }
   uint32_t free_fn = 0;
@@ -2222,14 +2175,9 @@ static uint32_t find_vax_mem_bus_space() {
     if (free_fn && phys_r32(pa + 20u) != free_fn) continue;  // vbs_free
     if (!looks_like_vax_fn(phys_r32(pa + 4u))) continue;  // vbs_map
     g_vax_mem_bus_space = pa | 0x80000000u;
-    LOG("boot: vax_mem_bus_space @%08X alloc=%08X map=%08X spec=%02X",
-        (unsigned)g_vax_mem_bus_space, (unsigned)alloc_fn,
-        (unsigned)phys_r32(pa + 4u), (unsigned)spec);
     return g_vax_mem_bus_space;
   }
   g_vax_mem_bus_space_miss = true;
-  LOG("boot: vax_mem_bus_space tag not found alloc=%08X spec=%02X",
-      (unsigned)alloc_fn, (unsigned)spec);
   return 0;
 }
 
@@ -2267,8 +2215,6 @@ static void plant_cmi_sa_iot(uint32_t narg) {
   mem_w32(iot_va, tag);
   if (g_mmgt_abort) return;
   g_dw750_iot_planted = true;
-  LOG("boot: plant sa_iot %08X→%08X sa=%08X (cmi.c leaves it unset)",
-      (unsigned)old, (unsigned)tag, (unsigned)aux);
 }
 #endif
 
@@ -2445,6 +2391,12 @@ static void raise_exception(uint32_t scb, bool extra_p1, uint32_t p1) {
   uint32_t old_cur = psl_cur();
   uint32_t old_sp = g_st.r[R_SP];
   const uint32_t fault_pc = g_last_op_pc ? g_last_op_pc : g_st.r[R_PC];
+  if (g_vms_reloc_done && g_vms_exc_left) {
+    g_vms_exc_left--;
+    LOG("boot: VMS exc scb=%02X handler=%08X PC=%08X SP=%08X R1=%08X R3=%08X",
+        (unsigned)scb, (unsigned)handler, (unsigned)fault_pc,
+        (unsigned)old_sp, (unsigned)g_st.r[1], (unsigned)g_st.r[3]);
+  }
 
   // A reserved PSL (data word) with IS set would push this frame on USP.
   if (!psl_is_sane(old_psl) && is_user_pc(fault_pc)) {
@@ -2510,7 +2462,9 @@ static void raise_mmgt(uint32_t va, bool write) {
   const uint32_t p1 = (write ? 4u : 0u) | (lnv ? 1u : 0u);
   const uint32_t fault_pc = g_last_op_pc ? g_last_op_pc : g_st.r[R_PC];
   const uint32_t scb = tnv ? SCB_TNV : SCB_ACV;
+#if VVAX_DIAG_LEVEL >= 1
   const char* tag = lnv ? "ACV LNV" : (tnv ? "TNV" : "ACV");
+#endif
 
   if (g_st.scbb == 0) {
     note_fault(2, write ? "mmgt-w" : "mmgt-r", va);
@@ -2563,38 +2517,6 @@ static void raise_mmgt(uint32_t va, bool write) {
   g_st.r[R_SP] = newsp - 16;
   g_st.r[R_PC] = handler;
   g_mmgt_abort = true;
-
-  // Demand-page TNV is routine. User ACV/LNV is the ash SIGSEGV class.
-  // Hold the 12 log slots until P0 (ash-class PC < 0x40000000); ld.so in
-  // P1 (7F6Exxxx) used to burn them ~10 min before /etc/rc dies.
-  if (old_cur != 0) {
-    const bool p0_pc = (fault_pc < 0x40000000u) && (fault_pc >= 0x1000u);
-    if (p0_pc && !g_user_mmgt_arm) {
-      g_user_mmgt_arm = true;
-      LOG("user mmgt: armed P0 PC=%08X", (unsigned)fault_pc);
-    }
-    // Skip zero-PTE demand-page ACV (fills the ring before /etc/rc dies).
-    // Keep LNV, NULL-page, and ACV where the PTE already has prot bits.
-    const uint32_t pte = vax_mmu::last_pte();
-    const bool null_va = (va < 0x1000u);
-    const bool prot_acv = !lnv && !tnv && (pte & vax_mmu::PTE_ACC) != 0;
-    if (g_user_mmgt_arm && !tnv && (lnv || null_va || prot_acv)) {
-      UserMmgtRec& rec = g_user_mmgt_ring[g_user_mmgt_head];
-      rec.tag = tag;
-      rec.va = va;
-      rec.pc = fault_pc;
-      rec.sp = old_sp;
-      rec.psl = old_psl;
-      rec.wr = write ? 1u : 0u;
-      rec.p0lr = vax_mmu::get_ipr(vax_mmu::IPR_P0LR);
-      rec.p1lr = vax_mmu::get_ipr(vax_mmu::IPR_P1LR);
-      rec.p0br = vax_mmu::get_ipr(vax_mmu::IPR_P0BR);
-      rec.p1br = vax_mmu::get_ipr(vax_mmu::IPR_P1BR);
-      g_user_mmgt_head = (uint8_t)((g_user_mmgt_head + 1u) % kUserMmgtRing);
-      if (g_user_mmgt_n < kUserMmgtRing) g_user_mmgt_n++;
-      g_user_mmgt_seq++;
-    }
-  }
 
 #if VVAX_DIAG_LEVEL >= 1
   const bool user_pc = (fault_pc & 0x80000000u) == 0 && fault_pc >= 0x1000u;
@@ -2734,8 +2656,8 @@ static void raise_mchk(uint32_t pa, bool write) {
   g_st.r[R_PC] = handler;
   g_mmgt_abort = true;
 
-  if (g_mchk_log_left > 0) {
-    g_mchk_log_left--;
+  if (g_mchk_log_left > 0 || g_vms_reloc_done) {
+    if (g_mchk_log_left > 0) g_mchk_log_left--;
     LOG("boot: MCHK pa=%08X wr=%u PC=%08X -> %08X SP %08X→%08X",
         (unsigned)pa, write ? 1u : 0u, (unsigned)fault_pc,
         (unsigned)handler, (unsigned)old_sp, (unsigned)g_st.r[R_SP]);
@@ -2866,130 +2788,6 @@ static void maybe_idle_clock_warp() {
 }
 #endif
 
-// GENERIC NetBSD/vax 10.1 (/netbsd on netbsd101-boot.dsk). First hits only.
-// Distinguishes: never entered raopen vs ONLINE IRQ vs wakeup-before-tsleep.
-#if VVAX_DIAG_LEVEL >= 1
-static void probe_rootopen() {
-  if (!g_boot_elf_active || !vax_mmu::mapen()) return;
-#if VVAX_DIAG_LEVEL == 0
-  if (!vax_mscp::host_online_wait()) return;
-#endif
-  const uint32_t pc = g_st.r[R_PC];
-  const bool waiting = vax_mscp::host_online_wait();
-  // After the first sticky kprobe, scan every 4096 insns — not every insn.
-  const bool scan = waiting || !g_rootopen_trace ||
-                    ((g_instr_count & 0xFFFu) == 0);
-
-  struct Probe {
-    uint32_t lo;
-    uint32_t sz;
-    const char* name;
-    uint8_t max_hits;
-    uint8_t hits;
-    bool sticky_trace;
-  };
-  static Probe probes[] = {
-      {0x80019DA4u, 0x4Cu, "cpu_rootconf", 1, 0, true},
-      {0x80229014u, 0x46Cu, "vfs_mountroot", 1, 0, true},
-      {0x8001F0B4u, 0x19Cu, "raopen", 2, 0, true},
-      {0x8001F6DEu, 0x26u, "ra_putonline", 2, 0, true},
-      {0x8001E7FAu, 0x113u, "ra_putonline.body", 2, 0, true},
-      {0x8001EC1Cu, 0x7Cu, "rx_putonline", 2, 0, true},
-      {0x8002219Cu, 0x2Cu, "udaintr", 1, 0, false},
-      {0x8001DC16u, 0x77u, "mscp_intr", 1, 0, false},
-      {0x8001CF1Au, 0x73Eu, "mscp_dorsp", 1, 0, false},
-      {0x8001F5C0u, 0x11Eu, "rronline", 1, 0, false},
-      {0x8001D66Au, 0x53u, "mscp_worker", 1, 0, false},
-      {0x801EDC2Cu, 0xF9u, "workqueue_enqueue", 1, 0, false},
-      {0x801ED71Eu, 0x171u, "workqueue_worker", 1, 0, false},
-      {0x801C717Au, 0xF6u, "tsleep", 1, 0, false},
-      {0x801C751Eu, 0x4Fu, "wakeup", 1, 0, false},
-      {0x80011128u, 0x25u, "gencngetc", 1, 0, false},
-  };
-  if (g_reset_probes) {
-    g_reset_probes = false;
-    for (Probe& p : probes) p.hits = 0;
-  }
-
-  if (scan) for (Probe& p : probes) {
-    if (pc < p.lo || pc >= p.lo + p.sz) continue;
-    if (p.sticky_trace) g_rootopen_trace = true;
-    else if (!g_rootopen_trace)
-      break;
-    if (p.hits >= p.max_hits) break;
-    p.hits++;
-    LOG("kprobe %s PC=%08X SP=%08X IPL=%u wait=%u ticks=%u warp=%u irq=%u",
-        p.name, (unsigned)pc, (unsigned)g_st.r[R_SP], (unsigned)cur_ipl(),
-        vax_mscp::host_online_wait() ? 1u : 0u,
-        (unsigned)vax_clock::ticks(), (unsigned)g_warp_fires,
-        (unsigned)g_st.irq_count);
-    break;
-  }
-
-  if (g_hb_hold) return;
-  if (!g_rootopen_trace && !vax_mscp::host_online_wait()) return;
-  if (g_logged_user_rei) return;
-  uint32_t now = millis();
-  if (now - g_root_hb_ms < 5000u) return;
-  g_root_hb_ms = now;
-  LOG("root hb: PC=%08X SP=%08X IPL=%u SISR=%04X wait=%u busy=%u ticks=%u warp=%u",
-      (unsigned)pc, (unsigned)g_st.r[R_SP], (unsigned)cur_ipl(),
-      (unsigned)(g_sisr & 0xFFFEu),
-      vax_mscp::host_online_wait() ? 1u : 0u,
-      vax_mscp::busy() ? 1u : 0u,
-      (unsigned)vax_clock::ticks(), (unsigned)g_warp_fires);
-}
-#endif  // VVAX_DIAG_LEVEL >= 1
-
-static void format_user_mmgt_rec(char* buf, size_t buflen, const UserMmgtRec& r) {
-  snprintf(buf, buflen,
-           "user mmgt %s VA=%08X wr=%u PC=%08X SP=%08X PSL=%08X P0LR=%08X P1LR=%08X",
-           r.tag ? r.tag : "?", (unsigned)r.va, (unsigned)r.wr,
-           (unsigned)r.pc, (unsigned)r.sp, (unsigned)r.psl,
-           (unsigned)r.p0lr, (unsigned)r.p1lr);
-}
-
-static void dump_user_mmgt_ring() {
-  if (!g_user_mmgt_arm || g_user_mmgt_n == 0) return;
-  if (g_user_mmgt_seq == g_user_mmgt_dumped_seq) return;
-  g_user_mmgt_dumped_seq = g_user_mmgt_seq;
-  LOG("user mmgt: last %u LNV/NULL/prot (seq=%u)", (unsigned)g_user_mmgt_n,
-      (unsigned)g_user_mmgt_seq);
-  uint8_t i = (g_user_mmgt_n == kUserMmgtRing) ? g_user_mmgt_head : 0;
-  char buf[192];
-  for (uint8_t k = 0; k < g_user_mmgt_n; k++) {
-    format_user_mmgt_rec(buf, sizeof(buf), g_user_mmgt_ring[i]);
-    LOG("%s", buf);
-    i = (uint8_t)((i + 1u) % kUserMmgtRing);
-  }
-}
-
-void dump_user_mmgt(void (*out)(const char* line)) {
-  if (!out) return;
-  char buf[192];
-  snprintf(buf, sizeof(buf),
-           "user mmgt: arm=%u n=%u seq=%u now P0LR=%08X P1LR=%08X P0BR=%08X P1BR=%08X",
-           g_user_mmgt_arm ? 1u : 0u, (unsigned)g_user_mmgt_n,
-           (unsigned)g_user_mmgt_seq,
-           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P0LR),
-           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P1LR),
-           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P0BR),
-           (unsigned)vax_mmu::get_ipr(vax_mmu::IPR_P1BR));
-  out(buf);
-  out("user mmgt: each line is stamped at the fault; hb reprints if seq advances");
-  if (!g_user_mmgt_arm || g_user_mmgt_n == 0) {
-    g_user_mmgt_dumped_seq = g_user_mmgt_seq;
-    return;
-  }
-  uint8_t i = (g_user_mmgt_n == kUserMmgtRing) ? g_user_mmgt_head : 0;
-  for (uint8_t k = 0; k < g_user_mmgt_n; k++) {
-    format_user_mmgt_rec(buf, sizeof(buf), g_user_mmgt_ring[i]);
-    out(buf);
-    i = (uint8_t)((i + 1u) % kUserMmgtRing);
-  }
-  g_user_mmgt_dumped_seq = g_user_mmgt_seq;
-}
-
 static void exec_hb_if_due() {
   if (g_hb_hold) return;
   const uint32_t now = millis();
@@ -3018,7 +2816,6 @@ static void exec_hb_if_due() {
       (unsigned)g_st.psl, (unsigned)cur_ipl(),
       (unsigned)g_instr_count, (unsigned)ips, (unsigned)vax_clock::ticks(),
       (unsigned long long)(g_hb_elapsed_ms / 1000ull));
-  dump_user_mmgt_ring();
 #if VVAX_COPY_TRACE
   if (g_watch_hb_left) {
     g_watch_hb_left--;
@@ -3028,6 +2825,12 @@ static void exec_hb_if_due() {
 }
 
 static void log_high_xfer(const char* tag, uint32_t dest) {
+  if (g_vms_reloc_done && g_vms_xfer_left) {
+    g_vms_xfer_left--;
+    LOG("boot: VMS %s dest=%08X from PC=%08X R1=%08X R3=%08X SP=%08X",
+        tag, (unsigned)dest, (unsigned)g_last_op_pc,
+        (unsigned)g_st.r[1], (unsigned)g_st.r[3], (unsigned)g_st.r[R_SP]);
+  }
 #if VVAX_DIAG_LEVEL < 1
   (void)tag;
   (void)dest;
@@ -3057,19 +2860,54 @@ static void vms_try_high_relocate(uint32_t pc) {
   if (dst < 0x000F0000u || dst >= 0x00100000u) return;
   if (pc < dst || pc >= dst + n) return;
   if (!pa_ok(src, n) || !pa_ok(dst, n)) return;
+  // V0.7.40: R1=0 skipped EXTZV vpos; then BSBW at dst+0xCE → 000FE225
+  // (zeros). Same bytes at src+0xCE (00008AA3) target 00006DB6. Slice is
+  // low-linked; run the low twin, leave the high copy for absolute refs.
+  LOG("boot: VMS pre-reloc PC=%08X PSL=%08X SP=%08X AP=%08X FP=%08X",
+      (unsigned)pc, (unsigned)g_st.psl, (unsigned)g_st.r[R_SP],
+      (unsigned)g_st.r[R_AP], (unsigned)g_st.r[R_FP]);
+  LOG("boot: VMS pre-reloc R0-5 %08X %08X %08X %08X %08X %08X",
+      (unsigned)g_st.r[0], (unsigned)g_st.r[1], (unsigned)g_st.r[2],
+      (unsigned)g_st.r[3], (unsigned)g_st.r[4], (unsigned)g_st.r[5]);
+  LOG("boot: VMS pre-reloc R6-11 %08X %08X %08X %08X %08X %08X",
+      (unsigned)g_st.r[6], (unsigned)g_st.r[7], (unsigned)g_st.r[8],
+      (unsigned)g_st.r[9], (unsigned)g_st.r[10], (unsigned)g_st.r[11]);
   memcpy(g_ram + dst, g_ram + src, n);
-  // The skipped VAX copy is MOVC3-class: leftover R0=0, R1=src+n, R2=0,
-  // R3=dst+n (V0.7.22 left R1/R2 as the pre-copy src/len; EXTZV then used
-  // R1 as a bit position and host-halted vpos).
-  g_st.r[0] = 0;
-  g_st.r[1] = src + n;
-  g_st.r[2] = 0;
-  g_st.r[3] = dst + n;
-  g_st.r[4] = 0;
-  g_st.r[5] = 0;
-  LOG("boot: VMS relocate %u bytes %08X -> %08X (I-fetch 0 at %08X) R1=%08X R3=%08X",
-      (unsigned)n, (unsigned)src, (unsigned)dst, (unsigned)pc,
-      (unsigned)g_st.r[1], (unsigned)g_st.r[3]);
+  g_st.r[1] = 0;
+  const uint32_t low_pc = src + (pc - dst);
+  g_st.r[R_PC] = low_pc;
+  LOG("boot: VMS relocate %u bytes %08X -> %08X (I-fetch 0 at %08X; R1=0 PC=%08X in-place)",
+      (unsigned)n, (unsigned)src, (unsigned)dst, (unsigned)pc, (unsigned)low_pc);
+  g_vms_reloc_done = true;
+  g_vms_tr_left = 16;
+  g_vms_xfer_left = 8;
+  g_vms_exc_left = 8;
+  if (pa_ok(dst, 16)) {
+    LOG("boot: VMS hdr %08X: %02X %02X %02X %02X %02X %02X %02X %02X "
+        "%02X %02X %02X %02X %02X %02X %02X %02X",
+        (unsigned)dst,
+        g_ram[dst], g_ram[dst + 1], g_ram[dst + 2], g_ram[dst + 3],
+        g_ram[dst + 4], g_ram[dst + 5], g_ram[dst + 6], g_ram[dst + 7],
+        g_ram[dst + 8], g_ram[dst + 9], g_ram[dst + 10], g_ram[dst + 11],
+        g_ram[dst + 12], g_ram[dst + 13], g_ram[dst + 14], g_ram[dst + 15]);
+  }
+  if (pa_ok(pc, 16)) {
+    LOG("boot: VMS entry %08X: %02X %02X %02X %02X %02X %02X %02X %02X "
+        "%02X %02X %02X %02X %02X %02X %02X %02X",
+        (unsigned)pc,
+        g_ram[pc], g_ram[pc + 1], g_ram[pc + 2], g_ram[pc + 3],
+        g_ram[pc + 4], g_ram[pc + 5], g_ram[pc + 6], g_ram[pc + 7],
+        g_ram[pc + 8], g_ram[pc + 9], g_ram[pc + 10], g_ram[pc + 11],
+        g_ram[pc + 12], g_ram[pc + 13], g_ram[pc + 14], g_ram[pc + 15]);
+  }
+  if (g_st.scbb && pa_ok(g_st.scbb, 0x24u)) {
+    LOG("boot: VMS SCBB=%08X mchk=%08X priv=%08X resop=%08X acv=%08X",
+        (unsigned)g_st.scbb,
+        (unsigned)phys_r32(g_st.scbb + 0x04u),
+        (unsigned)phys_r32(g_st.scbb + 0x10u),
+        (unsigned)phys_r32(g_st.scbb + 0x18u),
+        (unsigned)phys_r32(g_st.scbb + 0x20u));
+  }
 }
 
 // C7 F/D via host IEEE double (vax_fpa pack/unpack). EMOD/POLY stay reserved.
@@ -3458,9 +3296,6 @@ static void exec_one() {
 #endif
   vax_mscp::instr_tick();
   service_interrupts();
-#if VVAX_DIAG_LEVEL >= 1
-  probe_rootopen();
-#endif
   repair_user_exec_state();
 
   if (!g_logged_reloc && g_st.r[R_PC] >= 0x100000u && g_st.r[R_PC] < 0x300000u) {
@@ -3490,12 +3325,26 @@ static void exec_one() {
   g_last_op_pc = op_pc;
   if (g_guest_vms)
     vms_try_high_relocate(op_pc);
+  op_pc = g_st.r[R_PC];
+  g_last_op_pc = op_pc;
   uint8_t op = fetch8();
   // I-fetch ACV/TNV already vectored (PC = Xaccess_v / Xtransl_v). fetch8
   // returns 0 on abort, which is HALT — do not execute it. Next exec_one
   // runs the handler (NetBSD uvm_fault for a zero PTE / first user insn).
   if (g_mmgt_abort)
     return;
+#if VVAX_PCTRACE
+  if (vax_pctrace::enabled)
+    vax_pctrace::record(op_pc, op, g_st.r, g_st.psl);
+#endif
+  if (g_vms_reloc_done && g_vms_tr_left) {
+    g_vms_tr_left--;
+    LOG("boot: VMS tr PC=%08X op=%02X R0=%08X R1=%08X R2=%08X R3=%08X SP=%08X",
+        (unsigned)op_pc, (unsigned)op,
+        (unsigned)g_st.r[0], (unsigned)g_st.r[1],
+        (unsigned)g_st.r[2], (unsigned)g_st.r[3],
+        (unsigned)g_st.r[R_SP]);
+  }
   if (g_trace_left > 0 && VVAX_DIAG_LEVEL >= 2 && op != 0x90 && op != 0xF5) {
     g_trace_left--;
     LOG("boot tr: PC=%08X op=%02X", (unsigned)op_pc, op);
@@ -3539,6 +3388,10 @@ static void exec_one() {
           (unsigned)g_st.r[4], (unsigned)g_st.r[5],
           (unsigned)g_st.r[R_AP], (unsigned)g_st.r[R_FP],
           (unsigned)g_st.scbb);
+      LOG("  HALT R6=%08X R7=%08X R8=%08X R9=%08X R10=%08X R11=%08X PSL=%08X",
+          (unsigned)g_st.r[6], (unsigned)g_st.r[7], (unsigned)g_st.r[8],
+          (unsigned)g_st.r[9], (unsigned)g_st.r[10], (unsigned)g_st.r[11],
+          (unsigned)g_st.psl);
       if (g_ram && pa_ok(hpa, 8)) {
         LOG("  bytes@HALT PA: %02X %02X %02X %02X %02X %02X %02X %02X",
             g_ram[hpa], g_ram[hpa + 1], g_ram[hpa + 2], g_ram[hpa + 3],
@@ -3670,12 +3523,9 @@ static void exec_one() {
               (unsigned)rpb, (unsigned)g_st.r[0], (unsigned)g_st.r[R_AP]);
         }
         // Fingerprint at linked_base+0x233D (smart relocate → 0x7E).
-        uint32_t fp = (npc & ~3u) + 0x233Du;
-        if (g_ram && (uint64_t)fp < g_ram_bytes) {
+        if (g_ram) {
           g_boot_elf_active = true;
           vax_boot::plant_boot_stubs(npc - 2u);
-          LOG("boot: /boot fingerprint @%06X=%02X (expect 7E smart, 21=blind-corrupt)",
-              (unsigned)fp, (unsigned)g_ram[fp]);
         }
       } else if (npc < 0x1000u && !vax_boot::guest_os_vms()) {
         vax_boot::log_elf_hopp(npc);
@@ -3797,6 +3647,16 @@ static void exec_one() {
         LOG("boot: wild JSB dest=0x%08X PC=%08X R11=%08X conspage=0x%08X",
             (unsigned)a.addr, (unsigned)g_st.r[R_PC],
             (unsigned)g_st.r[11], (unsigned)vax_boot::ka630_conspage_pa());
+      }
+      if (vax_boot::guest_os_vms() && a.addr < 0x200u) {
+        static uint8_t s_vms_jsb0;
+        if (s_vms_jsb0 < 4) {
+          s_vms_jsb0++;
+          LOG("boot: VMS JSB dest=%08X from PC=%08X R1=%08X R6=%08X SP=%08X",
+              (unsigned)a.addr, (unsigned)g_last_op_pc,
+              (unsigned)g_st.r[1], (unsigned)g_st.r[6],
+              (unsigned)g_st.r[R_SP]);
+        }
       }
       log_high_xfer("JSB", a.addr);
       g_st.r[R_PC] = a.addr;
@@ -4130,16 +3990,6 @@ static void exec_one() {
       if (!s.ok || !d.ok) return;
       store_opnd(d, s.value, 1);
       set_nz_byte((uint8_t)s.value);
-#if VVAX_XOT_ISO
-      if (g_xot_iso_left && psl_cur() == 3u &&
-          g_last_op_pc == 0x0001C166u && (uint8_t)s.value == 0x81u) {
-        g_xot_iso_left--;
-        LOG("xot: CTLESC store PC=0001C166 dest=%08X R11=%08X 8(ap)=%08X R1=%08X R2=%08X",
-            (unsigned)d.addr, (unsigned)g_st.r[11],
-            (unsigned)peek_va32(g_st.r[R_AP] + 8u),
-            (unsigned)g_st.r[1], (unsigned)g_st.r[2]);
-      }
-#endif
       return;
     }
 
@@ -4150,9 +4000,6 @@ static void exec_one() {
       uint8_t a = (uint8_t)s1.value;
       uint8_t b = (uint8_t)s2.value;
       set_cmp_byte(a, b);
-#if VVAX_XOT_ISO
-      log_xot_cmpb(a, b);
-#endif
       return;
     }
 
@@ -5260,11 +5107,8 @@ static void exec_one() {
         if (need < 0x80400000u)
           need = 0x80400000u;  // /netbsd filesz ~3.5 MB + BSS slack
         need = (need + 511u) & ~511u;
-        if (g_st.r[9] < 0x80010000u) {
-          LOG("boot: plant R9 MARK_END 0x%08X (was 0x%08X, load_end 0x%08X)",
-              (unsigned)need, (unsigned)g_st.r[9], (unsigned)g_kernel_load_end);
+        if (g_st.r[9] < 0x80010000u)
           g_st.r[9] = need;
-        }
         // Plant only the CALLS prpb. KA630 kernel uba wants 0x20001468;
         // KA750 Unibus UDA is 0xFFF468. R11 is boothowto (3).
         if (!g_planted_kernel_csr && g_ram) {
@@ -5278,8 +5122,6 @@ static void exec_one() {
           mem_r8(g_st.r[R_PC]) == 0xDAu &&
           mem_r8(g_st.r[R_PC] + 1) == 0x1Fu &&
           mem_r8(g_st.r[R_PC] + 2) == 0x12u) {
-        LOG("boot: niclose elided (narg=%u) -> continue machdep_start",
-            (unsigned)narg);
         g_st.psl = (g_st.psl & ~PSL_IPL_MASK) | (31u << PSL_IPL_SHIFT);
         return;
       }
@@ -6234,6 +6076,10 @@ void step(unsigned n) {
   }
   if (g_running && !g_st.halt && !g_st.fault)
     exec_hb_if_due();
+#if VVAX_PCTRACE
+  if (g_st.halt || g_st.fault)
+    vax_pctrace::dump();
+#endif
   if (!g_logged_stop && g_logged_reloc && (g_st.halt || g_st.fault || !g_running)) {
     g_logged_stop = true;
     LOGE("boot stop: halt=%u fault=%u run=%u PC=%08X SP=%08X instr=%u",
@@ -6248,6 +6094,9 @@ bool running() { return g_running && !g_st.halt && !g_st.fault; }
 void request_halt() {
   g_st.halt = true;
   g_running = false;
+#if VVAX_PCTRACE
+  vax_pctrace::dump();
+#endif
 }
 
 uint8_t* ram() { return g_ram; }
@@ -6350,6 +6199,9 @@ void run() {
   g_st.halt = false;
   g_st.fault = 0;
   g_running = true;
+#if VVAX_PCTRACE
+  vax_pctrace::clear();
+#endif
   g_logged_reloc = false;
   g_instr_count = 0;
   g_trace_left = 0;
@@ -6400,11 +6252,6 @@ void run() {
   g_acv_storm_va = 0;
   g_acv_storm_count = 0;
   g_acv_storm_dumped = false;
-  g_user_mmgt_arm = false;
-  g_user_mmgt_head = 0;
-  g_user_mmgt_n = 0;
-  g_user_mmgt_seq = 0;
-  g_user_mmgt_dumped_seq = 0;
   g_logged_user_as_kern = false;
   g_p1_rei_log_left =
 #if VVAX_DIAG_LEVEL >= 2
@@ -6452,9 +6299,6 @@ void run() {
   g_insn_dump = 0;
   g_case_log = 0;
 #endif
-#if VVAX_XOT_ISO
-  g_xot_iso_left = 8;
-#endif
   g_in_ie = false;
   g_xlat_mode_ov = -1;
   g_logged_wild_jsb = false;
@@ -6484,11 +6328,10 @@ void run() {
 #endif
   g_warp_fires = 0;
   g_guest_vms = vax_boot::guest_os_vms();
-#if VVAX_DIAG_LEVEL >= 1
-  g_rootopen_trace = false;
-  g_root_hb_ms = 0;
-  g_reset_probes = true;
-#endif
+  g_vms_reloc_done = false;
+  g_vms_tr_left = 0;
+  g_vms_xfer_left = 0;
+  g_vms_exc_left = 0;
   g_hb_elapsed_ms = 0;
   g_hb_last_ms = 0;
   g_hb_last_instr = 0;

@@ -245,6 +245,7 @@ void config_apply_compiled_defaults(AppConfig& cfg) {
   cfg.clock_enabled = true;
   cfg.mscp_dump_flags = "";
   cfg.mscp_dump_count = 0;
+  cfg.pctrace = false;
 }
 
 enum ConfigDomain : uint8_t { CONFIG_NETWORK, CONFIG_EMULATOR };
@@ -329,6 +330,8 @@ static void parse_line(AppConfig& cfg, String& section, const String& raw,
       long n = val.toInt();
       if (n < 0) cfg.mscp_dump_count = 0xFFFFFFFFu;  // unlimited
       else cfg.mscp_dump_count = (uint32_t)n;
+    } else if (key == "pctrace") {
+      cfg.pctrace = truthy(val);
     }
   }
 }
@@ -389,6 +392,7 @@ bool config_load_vax(AppConfig& cfg) {
   cfg.disk_a = "";
   cfg.disk_b = "";
   cfg.boot_input_len = 0;
+  cfg.pctrace = false;
   config_apply_ethernet_defaults(cfg);
 
   bool existed = parse_config_file(cfg, VAX_CFG_PATH, CONFIG_EMULATOR);
@@ -493,6 +497,8 @@ bool config_write_default_vax(const AppConfig& cfg) {
     f.println("mscp_dump_count = -1");
   else
     f.printf ("mscp_dump_count = %lu\r\n", (unsigned long)cfg.mscp_dump_count);
+  f.println("; Last-N insn ring (needs VVAX_PCTRACE=1). Dumps on HALT.");
+  f.printf ("pctrace = %s\r\n", cfg.pctrace ? "on" : "off");
   f.close();
   return true;
 }
@@ -557,6 +563,7 @@ void config_print(const AppConfig& cfg) {
   LOG("[ethernet] enabled=%s  mac=%s  guest=%s/%s  gateway=%s",
       cfg.eth_enabled ? "true" : "false", mac, ip, mask, gw);
   LOG("[clock]   enabled=%s", cfg.clock_enabled ? "true" : "false");
-  LOG("[diag]    mscp_dump_flags=\"%s\"  mscp_dump_count=%lu",
-      cfg.mscp_dump_flags.c_str(), (unsigned long)cfg.mscp_dump_count);
+  LOG("[diag]    mscp_dump_flags=\"%s\"  mscp_dump_count=%lu  pctrace=%s",
+      cfg.mscp_dump_flags.c_str(), (unsigned long)cfg.mscp_dump_count,
+      cfg.pctrace ? "on" : "off");
 }

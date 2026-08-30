@@ -32,6 +32,7 @@
 #include "vax_tu58.h"
 #include "vax_clock.h"
 #include "vax_mscp.h"
+#include "vax_pctrace.h"
 #include "vax_boot.h"
 #include "eth_nat.h"
 #include "host_lib/console/term_personality.h"
@@ -194,31 +195,6 @@ static void sd_and_config_init() {
   } else {
     bool wifi_ok = config_load_wifi(cfg);
     bool vax_ok  = config_load_vax(cfg);
-    if (cfg.os == GUEST_OS_VMS && SD_MMC.exists("/vaxconfig-netbsd.ini")) {
-      LOG("os=vms in /vaxconfig.ini; applying /vaxconfig-netbsd.ini");
-      if (config_copy_file("/vaxconfig-netbsd.ini", VAX_CFG_PATH))
-        vax_ok = config_load_vax(cfg);
-    } else if (cfg.os == GUEST_OS_VMS &&
-               SD_MMC.exists("/disks/netbsd101-boot.dsk")) {
-      LOG("os=vms; no vaxconfig-netbsd.ini — writing NetBSD disks into %s",
-          VAX_CFG_PATH);
-      fs::File out = SD_MMC.open(VAX_CFG_PATH, FILE_WRITE);
-      if (out) {
-        out.println("[system]");
-        out.println("title = VAX 11/750 / NetBSD");
-        out.println("ram_mb = 8");
-        out.println("os = netbsd");
-        out.println("[disks]");
-        out.println("a = /disks/netbsd101-boot.dsk");
-        if (SD_MMC.exists("/disks/CD-NetBSD-10.1-vax.iso"))
-          out.println("b = /disks/CD-NetBSD-10.1-vax.iso");
-        out.println("boot = a");
-        out.close();
-        vax_ok = config_load_vax(cfg);
-      }
-    } else if (cfg.os == GUEST_OS_VMS) {
-      LOG("os=vms — VMS xxboot, not NetBSD. VAX config → vaxconfig-netbsd.ini");
-    }
     tft_status(ROW_CFG, "Cfg:   ",
                (wifi_ok && vax_ok) ? "loaded split cfg" : "wrote default cfg",
                (wifi_ok && vax_ok) ? TFT_GREEN : TFT_YELLOW);
@@ -235,6 +211,14 @@ static void mount_mscp_drives() {
 #else
   vax_mscp::set_dump(vax_mscp::parse_dump_flags(cfg.mscp_dump_flags.c_str()),
                      cfg.mscp_dump_count);
+#endif
+#if VVAX_PCTRACE
+  vax_pctrace::set_enabled(cfg.pctrace);
+  if (cfg.pctrace)
+    LOG("pctrace: on (halt dumps last %u insns)", vax_pctrace::DEPTH);
+#else
+  if (cfg.pctrace)
+    LOG("pctrace ignored (VVAX_PCTRACE 0)");
 #endif
   char line[48];
   int mounted = 0;

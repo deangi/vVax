@@ -242,8 +242,6 @@ static void cmd_dq(int, char**) {
   unsigned n = host_log_ring_count();
   shell_out_printf("--- host log ring (%u) ---\r\n", n);
   host_log_ring_dump(cmd_dq_line);
-  shell_out_text("--- user mmgt ---\r\n");
-  vax_cpu::dump_user_mmgt(cmd_dq_line);
 }
 
 static void cmd_help(int, char**) {
@@ -446,7 +444,7 @@ static void register_commands() {
                  reg_alias, "VAX commands");
   static const char* dq_alias[] = { "dlog", "dumpq", nullptr };
   shell_register("dq", cmd_dq,
-                 "dq                         dump host log ring + user mmgt",
+                 "dq                         dump host log ring",
                  dq_alias, "Host commands");
 }
 

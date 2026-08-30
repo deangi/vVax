@@ -4,7 +4,7 @@
 
 // ---- App metadata ----
 #define APP_TITLE       "vVax"
-#define APP_VERSION     "V0.7.34"
+#define APP_VERSION     "V0.7.41"
 // Stamp is expanded in version.cpp (not the .ino). Arduino does not reliably
 // rebuild vVax.ino.cpp when only this header changes.
 #define APP_BUILD_DATE  (__DATE__ " " __TIME__)
@@ -63,9 +63,9 @@
 #define vax_ram_mb_ok(mb)   ((mb) == 2 || (mb) == 4 || (mb) == 6 || (mb) == 8)
 
 // ---- Guest diagnostics (USB serial [vVax] lines) ----
-// 0 = quiet (default): boot milestones, errors, 30s ips heartbeat. No
-//     per-instruction USB, ACV storms, kprobe, JMP-user, or mem_r8 watches.
-// 1 = boot debug: kprobe, limited MSCP DMA, repair/REI logs
+// 0 = quiet (default): boot milestones, MSCP, errors, 30s ips heartbeat. No
+//     per-instruction USB, ACV storms, JMP-user, or mem_r8 watches.
+// 1 = boot debug: limited MSCP DMA, repair/REI logs
 // 2 = verbose: all ACV, DMA/xfer/load, frequent heartbeats
 #define VVAX_DIAG_LEVEL 0
 
@@ -82,10 +82,10 @@
 #define VVAX_COPY_TRACE 0
 #endif
 
-// Phase 6 xot isolation: log ash argstr CMPB $0x8C / CTLESC store NZVC.
-// Compare with SIMH CC_CMP_B (N = signed src<dst, V not set).
-#ifndef VVAX_XOT_ISO
-#define VVAX_XOT_ISO 0
+// Last-N instruction ring (PC + opcode + GPRs + PSL). 0 = compiled out of
+// exec_one (no ring, no branch). 1 = present; [diag] pctrace=on enables it.
+#ifndef VVAX_PCTRACE
+#define VVAX_PCTRACE 1
 #endif
 
 // Compile-time guest CPU. One machine per firmware image — not a runtime switch.

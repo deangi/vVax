@@ -307,7 +307,6 @@ void plant_boot_stubs(uint32_t boot_base) {
   ram[niclose + 1] = 0;
   ram[niclose + 2] = 0x04;  // RET
   ram[niclose + 3] = 0;
-  LOG("boot: niclose stub @%08X (machdep_start, no DEUNA)", (unsigned)niclose);
 }
 
 bool is_niclose(uint32_t pa) {
